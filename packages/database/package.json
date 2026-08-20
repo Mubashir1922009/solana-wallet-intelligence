@@ -1,0 +1,13 @@
+{
+  "name": "@intelligence/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@intelligence/core": "workspace:*",
+    "@intelligence/shared": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "postgres": "3.4.7"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@intelligence/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsup --config tsup.config.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.1.0",
+    "@intelligence/config": "workspace:*",
+    "@intelligence/core": "workspace:*",
+    "@intelligence/database": "workspace:*",
+    "@intelligence/providers": "workspace:*",
+    "fastify": "5.8.5",
+    "pino": "9.9.0",
+    "redis": "5.8.2",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "tsup": "8.5.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@intelligence/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@intelligence/shared": "workspace:*",
+    "zod": "4.1.5"
+  }
+}

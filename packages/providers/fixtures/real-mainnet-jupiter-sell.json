@@ -1,0 +1,39 @@
+{
+  "source": {
+    "network": "solana-mainnet-beta",
+    "rpcEndpoint": "https://api.mainnet-beta.solana.com",
+    "capturedAt": "2026-08-20T16:51:00.000Z",
+    "signature": "yRFQqLjGEVK9zHxghf9AYisRYQiT9y7oNaJxcYgjvPncZarZPUBTEC5o7ygj8YvhtG19rgzg8guG16r6HkHxbZ9",
+    "note": "Reduced from the real jsonParsed getTransaction response to the signer wallet and its token account; numeric and balance fields are unchanged."
+  },
+  "rpcResponse": {
+    "jsonrpc": "2.0",
+    "result": {
+      "slot": 440510670,
+      "blockTime": 1787244601,
+      "version": 0,
+      "transaction": {
+        "signatures": ["yRFQqLjGEVK9zHxghf9AYisRYQiT9y7oNaJxcYgjvPncZarZPUBTEC5o7ygj8YvhtG19rgzg8guG16r6HkHxbZ9"],
+        "message": {
+          "accountKeys": [
+            { "pubkey": "GmyfrAhK5dexSp6gQ5F9y1JC4ZYyG6iJfgrX8BWPCJNz", "signer": true, "source": "transaction", "writable": true },
+            { "pubkey": "MghiCJjTLkkTPCAQeQk5QAhgVsDtT9HPmLgznWU52aR", "signer": false, "source": "transaction", "writable": true },
+            { "pubkey": "od3Qqu6fUXm9b6HU3Nx1sZqH7CtKQg4TN4JNSyW1ugw", "signer": false, "source": "transaction", "writable": true }
+          ]
+        }
+      },
+      "meta": {
+        "err": null,
+        "fee": 7965,
+        "preBalances": [451293727, 0, 2074080],
+        "postBalances": [451298611, 0, 2074080],
+        "preTokenBalances": [
+          { "accountIndex": 2, "mint": "EpXtn6xGoZ4Y45vRjiDUHSCGbBoJD5FaEqZbF98YswH1", "owner": "GmyfrAhK5dexSp6gQ5F9y1JC4ZYyG6iJfgrX8BWPCJNz", "uiTokenAmount": { "amount": "561429", "decimals": 6 } }
+        ],
+        "postTokenBalances": [
+          { "accountIndex": 2, "mint": "EpXtn6xGoZ4Y45vRjiDUHSCGbBoJD5FaEqZbF98YswH1", "owner": "GmyfrAhK5dexSp6gQ5F9y1JC4ZYyG6iJfgrX8BWPCJNz", "uiTokenAmount": { "amount": "6", "decimals": 6 } }
+        ]
+      }
+    }
+  }
+}
