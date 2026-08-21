@@ -2,7 +2,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
-import { PaperPositionService, TransactionIngestionService, WalletHistoryBackfillService, type ExecutionMode, type IntelligenceStore, type SystemComponentHealth } from "@intelligence/core";
+import { PaperPositionService, TransactionIngestionService, WalletHistoryBackfillService, type ExecutionMode, type IntelligenceStore, type ProviderBudgetSnapshot, type ProviderTransactionEnvelope, type SystemComponentHealth, type TrackedWalletManager } from "@intelligence/core";
+import type { LiveConnectionSnapshot } from "@intelligence/providers";
 import { JupiterMarketError, parseHeliusWebhookPayload, type ChainDataProvider, type QuoteMarketDataProvider } from "@intelligence/providers";
 import { RuntimeCounters } from "./metrics.js";
 
@@ -25,6 +26,18 @@ export interface AppDependencies {
   quoteProvider?: QuoteMarketDataProvider;
   historyMaximumTransactions?: number;
   historyConcurrency?: number;
+  watchlist?: TrackedWalletManager;
+  liveStatus?: () => LiveConnectionSnapshot;
+  providerBudgets?: () => ProviderBudgetSnapshot[];
+  runtimeControl?: {
+    watcherPaused(): boolean;
+    shadowKilled(): boolean;
+    pauseWatcher(): void;
+    resumeWatcher(): void;
+    killShadow(): void;
+    restoreShadow(): void;
+  };
+  onWebhookEnvelope?: (envelope: ProviderTransactionEnvelope) => Promise<void>;
 }
 
 function safeJson(value: unknown): unknown {
@@ -71,8 +84,11 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       check("openrouter", undefined, !dependencies.openRouterEnabled),
       Promise.resolve<SystemComponentHealth>({ component: "webhook", status: dependencies.webhookAuth === undefined ? "degraded" : "healthy", checkedAt: new Date().toISOString(), detail: dependencies.webhookAuth === undefined ? "authentication not configured" : "authentication configured", latencyMs: null })
     ]);
-    return { executionMode: dependencies.executionMode, network: dependencies.network, killSwitchActive: false, lastProcessedSlot: null, queueLagMs: null, counters: counters.snapshot(), components };
+    const live = dependencies.liveStatus?.() ?? null;
+    return { executionMode: dependencies.executionMode, network: dependencies.network, killSwitchActive: dependencies.runtimeControl?.shadowKilled() ?? false, watcherPaused: dependencies.runtimeControl?.watcherPaused() ?? false, lastProcessedSlot: live?.lastObservedSlot ?? null, queueLagMs: null, counters: counters.snapshot(), live, providerBudgets: dependencies.providerBudgets?.() ?? [], components };
   });
+
+  app.get("/api/live/status", async () => safeJson({ connection: dependencies.liveStatus?.() ?? null, subscriptions: await dependencies.store.listLiveSubscriptionStates(), providerBudgets: dependencies.providerBudgets?.() ?? [] }));
 
   app.get("/api/wallets", async () => safeJson(await dependencies.store.listWallets()));
   app.get("/api/wallets/:publicKey", async (request, reply) => {
@@ -83,13 +99,15 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.post("/api/wallets/:publicKey/track", async (request, reply) => {
     const { publicKey } = z.object({ publicKey: publicKeySchema }).parse(request.params);
     const now = new Date().toISOString();
-    await dependencies.store.upsertWallet(publicKey, now);
-    const wallet = await dependencies.store.setWalletStatus(publicKey, "tracking", now);
+    if (dependencies.watchlist !== undefined) await dependencies.watchlist.add(publicKey);
+    else { await dependencies.store.upsertWallet(publicKey, now); await dependencies.store.setWalletStatus(publicKey, "tracking", now); }
+    const wallet = await dependencies.store.getWallet(publicKey);
     return reply.code(200).send(safeJson(wallet));
   });
   app.post("/api/wallets/:publicKey/pause", async (request, reply) => {
     const { publicKey } = z.object({ publicKey: publicKeySchema }).parse(request.params);
-    const wallet = await dependencies.store.setWalletStatus(publicKey, "paused", new Date().toISOString());
+    if (dependencies.watchlist !== undefined) await dependencies.watchlist.pause(publicKey);
+    const wallet = dependencies.watchlist === undefined ? await dependencies.store.setWalletStatus(publicKey, "paused", new Date().toISOString()) : await dependencies.store.getWallet(publicKey);
     return wallet === null ? reply.code(404).send({ error: "not_found" }) : safeJson(wallet);
   });
   app.get("/api/wallets/:publicKey/actions", async (request) => {
@@ -154,6 +172,13 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const position = await dependencies.store.getPosition(id);
     return position === null ? reply.code(404).send({ error: "not_found" }) : safeJson(position);
   });
+  app.get("/api/positions/:id/intelligence", async (request, reply) => {
+    const { id } = z.object({ id: idSchema }).parse(request.params);
+    const position = await dependencies.store.getPosition(id);
+    if (position === null) return reply.code(404).send({ error: "not_found" });
+    const [context, marks, exits, events] = await Promise.all([dependencies.store.getShadowPositionRecord(id), dependencies.store.listPositionMarks(id, 250), dependencies.store.listExitRecommendations(id, 100), dependencies.store.listPositionEvents(id, 250)]);
+    return safeJson({ position, context, marks, exitRecommendations: exits, events });
+  });
   app.post("/api/positions/:id/wait", async (request) => {
     const { id } = z.object({ id: idSchema }).parse(request.params);
     return safeJson(await positions.wait(id));
@@ -161,6 +186,14 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.post("/api/positions/:id/recalculate", async (request) => {
     const { id } = z.object({ id: idSchema }).parse(request.params);
     return safeJson(await positions.recalculate(id));
+  });
+  app.post("/api/positions/:id/manual-control", async (request) => {
+    const { id } = z.object({ id: idSchema }).parse(request.params);
+    return safeJson(await positions.takeManualControl(id));
+  });
+  app.post("/api/positions/:id/system-control", async (request) => {
+    const { id } = z.object({ id: idSchema }).parse(request.params);
+    return safeJson(await positions.returnSystemControl(id));
   });
   app.post("/api/positions/:id/authorize-paper-sell", async (request) => {
     const { id } = z.object({ id: idSchema }).parse(request.params);
@@ -170,6 +203,41 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.get("/api/events/recent", async (request) => {
     const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
     return safeJson(await dependencies.store.listRecentEvents(limit));
+  });
+
+  app.get("/api/tokens/:mint/intelligence", async (request, reply) => {
+    const { mint } = z.object({ mint: publicKeySchema }).parse(request.params);
+    const snapshot = await dependencies.store.getTokenIntelligenceSnapshot(mint);
+    return snapshot === null ? reply.code(404).send({ error: "not_found" }) : safeJson(snapshot);
+  });
+  app.get("/api/token-risk/recent", async (request) => {
+    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(250).default(50) }).parse(request.query);
+    return safeJson(await dependencies.store.listRecentTokenRiskEvaluations(limit));
+  });
+  app.get("/api/notifications", async (request) => {
+    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(250).default(50) }).parse(request.query);
+    return safeJson(await dependencies.store.listNotifications(limit));
+  });
+  app.get("/api/discovery/:publicKey", async (request) => {
+    const { publicKey } = z.object({ publicKey: publicKeySchema }).parse(request.params);
+    return safeJson({ discoveries: await dependencies.store.listCandidateDiscoveries(publicKey), forwardReturns: await dependencies.store.listForwardReturnObservations(publicKey) });
+  });
+
+  app.post("/api/runtime/watcher/pause", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.pauseWatcher(); return { watcherPaused: true }; });
+  app.post("/api/runtime/watcher/resume", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.resumeWatcher(); return { watcherPaused: false }; });
+  app.post("/api/runtime/shadow/kill", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.killShadow(); return { killSwitchActive: true }; });
+  app.post("/api/runtime/shadow/restore", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.restoreShadow(); return { killSwitchActive: false }; });
+
+  app.get("/api/stream", async (request, reply) => {
+    reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+    const send = async (): Promise<void> => {
+      const payload = safeJson({ at: new Date().toISOString(), live: dependencies.liveStatus?.() ?? null, positions: await dependencies.store.listPositions(), notifications: await dependencies.store.listNotifications(20), tokenRisk: await dependencies.store.listRecentTokenRiskEvaluations(20) });
+      reply.raw.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    await send();
+    const timer = setInterval(() => { void send().catch(() => reply.raw.end()); }, 5_000);
+    request.raw.once("close", () => clearInterval(timer));
+    reply.hijack();
   });
 
   app.post("/api/webhooks/helius", async (request, reply) => {
@@ -185,6 +253,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       throw error;
     }
     const results = await Promise.all(envelopes.map((envelope) => ingestion.ingest(envelope)));
+    if (dependencies.onWebhookEnvelope !== undefined) await Promise.all(envelopes.map((envelope) => dependencies.onWebhookEnvelope?.(envelope)));
     for (const result of results) counters.increment(result.outcome === "duplicate" ? "duplicates_ignored" : "events_processed");
     return reply.code(202).send({ accepted: results.filter((result) => result.outcome === "accepted").length, duplicates: results.filter((result) => result.outcome === "duplicate").length });
   });

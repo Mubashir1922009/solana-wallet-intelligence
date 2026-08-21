@@ -6,3 +6,6 @@ export * from "./jupiter.js";
 export * from "./openrouter.js";
 export * from "./execution.js";
 export * from "./notifications.js";
+export * from "./rate-budget.js";
+export * from "./live-chain.js";
+export * from "./token-rpc.js";

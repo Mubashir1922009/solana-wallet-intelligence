@@ -15,6 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { EntryMarketSnapshot, TokenRiskSnapshot, WalletScore } from "@intelligence/core";
+import type { ShadowPositionContext, TokenConcentrationObservation, TokenMintObservation, TokenRiskComponent, WalletReputationSnapshot } from "@intelligence/core";
 import type { JsonValue } from "@intelligence/shared";
 
 export const walletStatus = pgEnum("wallet_status", ["candidate", "tracking", "rejected", "paused", "insufficient_data"]);
@@ -196,8 +197,9 @@ export const userActions = pgTable("user_actions", {
 export const notifications = pgTable("notifications", {
   id: uuid("id").primaryKey(), type: text("type").notNull(), payload: jsonb("payload").$type<JsonValue>().notNull(),
   provider: text("provider").notNull(), deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: "string" }),
-  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
-}, (table) => [index("notifications_created_idx").on(table.createdAt)]);
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(), status: text("status").notNull().default("PENDING"),
+  errorCode: text("error_code"), attemptedAt: timestamp("attempted_at", { withTimezone: true, mode: "string" }), idempotencyKey: text("idempotency_key")
+}, (table) => [index("notifications_created_idx").on(table.createdAt), uniqueIndex("notifications_idempotency_uidx").on(table.idempotencyKey)]);
 
 export const systemHealth = pgTable("system_health", {
   id: uuid("id").primaryKey(), component: text("component").notNull(), status: text("status").notNull(), detail: text("detail").notNull(),
@@ -244,3 +246,62 @@ export const walletBackfillRuns = pgTable("wallet_backfill_runs", {
   actionsPersisted: integer("actions_persisted").notNull(), duplicatesIgnored: integer("duplicates_ignored").notNull(), failures: jsonb("failures").notNull(),
   complete: boolean("complete").notNull(), startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(), completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }).notNull()
 }, (table) => [index("wallet_backfill_wallet_time_idx").on(table.wallet, table.startedAt)]);
+
+export const tokenIntelligenceSnapshots = pgTable("token_intelligence_snapshots", {
+  id: uuid("id").primaryKey(), tokenMint: text("token_mint").notNull(), rawSupply: numeric("raw_supply", { precision: 78, scale: 0 }), decimals: integer("decimals"),
+  supplySlot: bigint("supply_slot", { mode: "bigint" }), mintObservation: jsonb("mint_observation").$type<TokenMintObservation>().notNull(),
+  concentration: jsonb("concentration").$type<TokenConcentrationObservation>().notNull(), confidence: text("confidence").notNull(), completeness: doublePrecision("completeness").notNull(),
+  reasons: jsonb("reasons").$type<string[]>().notNull(), observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [index("token_intelligence_mint_time_idx").on(table.tokenMint, table.observedAt)]);
+
+export const tokenLargestAccounts = pgTable("token_largest_accounts", {
+  id: uuid("id").primaryKey(), snapshotId: uuid("snapshot_id").notNull().references(() => tokenIntelligenceSnapshots.id, { onDelete: "cascade" }),
+  tokenAccount: text("token_account").notNull(), rawBalance: numeric("raw_balance", { precision: 78, scale: 0 }).notNull(), decimals: integer("decimals").notNull(),
+  percentageOfSupply: numeric("percentage_of_supply"), resolvedOwner: text("resolved_owner"), ownerClassification: text("owner_classification").notNull(),
+  slot: bigint("slot", { mode: "bigint" }).notNull(), observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(), provenance: text("provenance").notNull()
+}, (table) => [uniqueIndex("token_largest_snapshot_account_uidx").on(table.snapshotId, table.tokenAccount), index("token_largest_owner_idx").on(table.resolvedOwner)]);
+
+export const tokenRiskEvaluations = pgTable("token_risk_evaluations", {
+  id: uuid("id").primaryKey(), tokenMint: text("token_mint").notNull(), totalRisk: doublePrecision("total_risk").notNull(), components: jsonb("components").$type<TokenRiskComponent[]>().notNull(),
+  reasonCodes: jsonb("reason_codes").$type<string[]>().notNull(), confidence: text("confidence").notNull(), dataCompleteness: doublePrecision("data_completeness").notNull(),
+  evaluatedAt: timestamp("evaluated_at", { withTimezone: true, mode: "string" }).notNull(), rulesetHash: text("ruleset_hash").notNull(), intelligenceSnapshotId: uuid("intelligence_snapshot_id"), marketObservationId: uuid("market_observation_id")
+}, (table) => [index("token_risk_evaluation_mint_time_idx").on(table.tokenMint, table.evaluatedAt)]);
+
+export const liveSubscriptionState = pgTable("live_subscription_state", {
+  wallet: text("wallet").primaryKey(), lifecycle: text("lifecycle").notNull(), priority: integer("priority").notNull(), provider: text("provider").notNull(), subscriptionHealthy: boolean("subscription_healthy").notNull(),
+  lastObservedSignature: text("last_observed_signature"), lastObservedSlot: bigint("last_observed_slot", { mode: "bigint" }), lastActivityAt: timestamp("last_activity_at", { withTimezone: true, mode: "string" }),
+  lastSuccessfulIngestionAt: timestamp("last_successful_ingestion_at", { withTimezone: true, mode: "string" }), updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [index("live_subscription_lifecycle_priority_idx").on(table.lifecycle, table.priority)]);
+
+export const shadowPositionRecords = pgTable("shadow_position_records", {
+  positionId: uuid("position_id").primaryKey().references(() => paperPositions.id, { onDelete: "cascade" }), context: jsonb("context").$type<ShadowPositionContext>().notNull(), createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+});
+
+export const positionMarks = pgTable("position_marks", {
+  id: uuid("id").primaryKey(), positionId: uuid("position_id").notNull().references(() => paperPositions.id, { onDelete: "cascade" }), marketObservationId: uuid("market_observation_id"),
+  observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(), estimatedValueUsd: numeric("estimated_value_usd"), grossUnrealizedPnlUsd: numeric("gross_unrealized_pnl_usd"),
+  netUnrealizedPnlUsd: numeric("net_unrealized_pnl_usd"), estimatedFeesUsd: numeric("estimated_fees_usd"), maxFavorableExcursionUsd: numeric("max_favorable_excursion_usd"), maxAdverseExcursionUsd: numeric("max_adverse_excursion_usd"),
+  timeHeldMs: integer("time_held_ms").notNull(), quoteAgeMs: integer("quote_age_ms"), routeAvailable: boolean("route_available").notNull(), confidence: text("confidence").notNull(), provenance: text("provenance").notNull()
+}, (table) => [index("position_marks_position_time_idx").on(table.positionId, table.observedAt)]);
+
+export const exitRecommendations = pgTable("exit_recommendations", {
+  id: uuid("id").primaryKey(), positionId: uuid("position_id").notNull().references(() => paperPositions.id, { onDelete: "cascade" }), recommendation: text("recommendation").notNull(),
+  reasonCodes: jsonb("reason_codes").$type<string[]>().notNull(), confidence: text("confidence").notNull(), inputSnapshot: jsonb("input_snapshot").$type<JsonValue>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(), rulesetHash: text("ruleset_hash").notNull()
+}, (table) => [index("exit_recommendations_position_time_idx").on(table.positionId, table.createdAt)]);
+
+export const candidateDiscoveries = pgTable("candidate_discoveries", {
+  id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), reason: text("reason").notNull(), sourceToken: text("source_token").notNull(), sourceEvent: text("source_event").notNull(),
+  independentObservationCount: integer("independent_observation_count").notNull(), confidence: text("confidence").notNull(), firstDiscoveredAt: timestamp("first_discovered_at", { withTimezone: true, mode: "string" }).notNull(),
+  lastObservedAt: timestamp("last_observed_at", { withTimezone: true, mode: "string" }).notNull(), idempotencyKey: text("idempotency_key").notNull()
+}, (table) => [uniqueIndex("candidate_discoveries_idempotency_uidx").on(table.idempotencyKey), index("candidate_discoveries_wallet_idx").on(table.wallet)]);
+
+export const forwardReturnObservations = pgTable("forward_return_observations", {
+  id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), transactionSignature: text("transaction_signature").notNull(), tokenMint: text("token_mint").notNull(), windowMs: integer("window_ms").notNull(),
+  status: text("status").notNull(), entryMarketObservationId: uuid("entry_market_observation_id"), forwardMarketObservationId: uuid("forward_market_observation_id"), followerReturn: doublePrecision("follower_return"),
+  observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(), idempotencyKey: text("idempotency_key").notNull()
+}, (table) => [uniqueIndex("forward_return_idempotency_uidx").on(table.idempotencyKey), index("forward_return_wallet_time_idx").on(table.wallet, table.observedAt)]);
+
+export const walletReputationSnapshots = pgTable("wallet_reputation_snapshots", {
+  id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), snapshot: jsonb("snapshot").$type<WalletReputationSnapshot>().notNull(), calculatedAt: timestamp("calculated_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [uniqueIndex("wallet_reputation_wallet_uidx").on(table.wallet)]);

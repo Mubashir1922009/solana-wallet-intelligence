@@ -40,4 +40,17 @@ describe("Fastify API", () => {
     expect(first.json()).toEqual({ accepted: 1, duplicates: 0 });
     expect(second.json()).toEqual({ accepted: 0, duplicates: 1 });
   });
+  it("exposes and applies separate watcher and shadow controls", async () => {
+    let paused = false;
+    let killed = false;
+    app = await buildApp({ store: new InMemoryIntelligenceStore(), executionMode: "SHADOW", network: "mainnet-beta", runtimeControl: { watcherPaused: () => paused, shadowKilled: () => killed, pauseWatcher: () => { paused = true; }, resumeWatcher: () => { paused = false; }, killShadow: () => { killed = true; }, restoreShadow: () => { killed = false; } } });
+    expect((await app.inject({ method: "POST", url: "/api/runtime/watcher/pause" })).json()).toEqual({ watcherPaused: true });
+    expect((await app.inject({ method: "POST", url: "/api/runtime/shadow/kill" })).json()).toEqual({ killSwitchActive: true });
+    expect((await app.inject({ method: "GET", url: "/api/system/status" })).json()).toMatchObject({ watcherPaused: true, killSwitchActive: true });
+  });
+  it("returns explicit empty runtime intelligence collections", async () => {
+    app = await buildApp({ store: new InMemoryIntelligenceStore(), executionMode: "PAPER", network: "mainnet-beta" });
+    expect((await app.inject({ method: "GET", url: "/api/token-risk/recent" })).json()).toEqual([]);
+    expect((await app.inject({ method: "GET", url: "/api/notifications" })).json()).toEqual([]);
+  });
 });

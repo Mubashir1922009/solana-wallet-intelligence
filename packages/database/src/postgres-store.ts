@@ -1,9 +1,9 @@
 import { desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import type { ChainTransaction, CopyabilityEvaluation, CrowdingObservation, IntelligenceStore, MarketObservation, PaperPosition, PositionEvent, Signal, TradeDecision, UserAction, Wallet, WalletAction, WalletBackfillRun, WalletMetrics, WalletStatus } from "@intelligence/core";
+import type { AIAnalysis, CandidateDiscovery, ChainTransaction, CopyabilityEvaluation, CrowdingObservation, ExitRecommendation, ForwardReturnObservation, IntelligenceStore, LiveSubscriptionState, MarketObservation, NotificationRecord, PaperPosition, PositionEvent, PositionMark, ShadowPositionContext, ShadowPositionRecord, Signal, TokenConcentrationObservation, TokenIntelligenceSnapshot, TokenMintObservation, TokenRiskEvaluation, TradeDecision, UserAction, Wallet, WalletAction, WalletBackfillRun, WalletMetrics, WalletReputationSnapshot, WalletStatus } from "@intelligence/core";
 import { newId } from "@intelligence/shared";
-import { chainTransactions, copyabilityEvaluations, crowdingObservations, marketObservations, paperPositions, positionEvents, signals, tradeDecisions, transactionWallets, userActions, walletActions, walletBackfillRuns, walletMetrics, wallets } from "./schema.js";
+import { aiAnalyses, candidateDiscoveries, chainTransactions, copyabilityEvaluations, crowdingObservations, exitRecommendations, forwardReturnObservations, liveSubscriptionState, marketObservations, notifications, paperPositions, positionEvents, positionMarks, shadowPositionRecords, signals, tokenIntelligenceSnapshots, tokenLargestAccounts, tokenRiskEvaluations, tradeDecisions, transactionWallets, userActions, walletActions, walletBackfillRuns, walletMetrics, walletReputationSnapshots, wallets } from "./schema.js";
 
 type Database = ReturnType<typeof drizzle>;
 
@@ -33,6 +33,7 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
   async upsertWalletMetrics(metrics: WalletMetrics): Promise<void> {
     await this.db.insert(walletMetrics).values(metrics).onConflictDoUpdate({ target: walletMetrics.walletId, set: metrics });
   }
+  async insertAIAnalysis(analysis: AIAnalysis): Promise<void> { await this.db.insert(aiAnalyses).values(analysis); }
   async insertTransaction(transaction: ChainTransaction): Promise<"inserted" | "duplicate"> {
     const rows = await this.db.transaction(async (tx) => {
       const inserted = await tx.insert(chainTransactions).values({
@@ -62,11 +63,18 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
   }
   async listWalletActions(publicKey: string, limit: number): Promise<WalletAction[]> {
     const rows = await this.db.select().from(walletActions).where(eq(walletActions.wallet, publicKey)).orderBy(desc(walletActions.observedAt)).limit(limit);
-    return rows.map((row) => ({
+    return rows.map((row) => this.mapWalletAction(row));
+  }
+  async listRecentWalletActions(limit: number): Promise<WalletAction[]> {
+    const rows = await this.db.select().from(walletActions).orderBy(desc(walletActions.observedAt)).limit(limit);
+    return rows.map((row) => this.mapWalletAction(row));
+  }
+  private mapWalletAction(row: typeof walletActions.$inferSelect): WalletAction {
+    return {
       ...row, actionType: row.actionType as WalletAction["actionType"], classification: row.classification as WalletAction["classification"],
       classificationConfidence: row.classificationConfidence as WalletAction["classificationConfidence"], ambiguityReasons: row.ambiguityReasons as WalletAction["ambiguityReasons"],
       inputRawAmount: row.inputRawAmount === null ? null : BigInt(row.inputRawAmount), outputRawAmount: row.outputRawAmount === null ? null : BigInt(row.outputRawAmount)
-    }));
+    };
   }
   async insertSignal(signal: Signal): Promise<"inserted" | "duplicate"> {
     const rows = await this.db.insert(signals).values(signal).onConflictDoNothing({ target: [signals.sourceTransactionSignature, signals.sourceWallet, signals.tokenMint] }).returning({ id: signals.id });
@@ -101,6 +109,105 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
     return rows.length === 0 ? "duplicate" : "inserted";
   }
   async insertBackfillRun(run: WalletBackfillRun): Promise<void> { await this.db.insert(walletBackfillRuns).values(run); }
+  async insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void> {
+    const mintObservation = serializeBigInts(snapshot.mint) as TokenMintObservation;
+    const concentration = serializeBigInts(snapshot.concentration) as TokenConcentrationObservation;
+    await this.db.transaction(async (tx) => {
+      await tx.insert(tokenIntelligenceSnapshots).values({
+        id: snapshot.id, tokenMint: snapshot.tokenMint, rawSupply: snapshot.supply?.rawSupply.toString() ?? null,
+        decimals: snapshot.supply?.decimals ?? null, supplySlot: snapshot.supply?.slot ?? null, mintObservation,
+        concentration, confidence: snapshot.confidence, completeness: snapshot.completeness, reasons: snapshot.reasons, observedAt: snapshot.observedAt
+      });
+      if (snapshot.largestAccounts.length > 0) {
+        await tx.insert(tokenLargestAccounts).values(snapshot.largestAccounts.map((account) => ({
+          id: newId(), snapshotId: snapshot.id, tokenAccount: account.tokenAccount, rawBalance: account.rawBalance.toString(), decimals: account.decimals,
+          percentageOfSupply: account.percentageOfSupply, resolvedOwner: account.resolvedOwner, ownerClassification: account.ownerClassification,
+          slot: account.slot, observedAt: account.observedAt, provenance: account.provenance
+        })));
+      }
+    });
+  }
+  async getTokenIntelligenceSnapshot(mint: string): Promise<TokenIntelligenceSnapshot | null> {
+    const [row] = await this.db.select().from(tokenIntelligenceSnapshots).where(eq(tokenIntelligenceSnapshots.tokenMint, mint)).orderBy(desc(tokenIntelligenceSnapshots.observedAt)).limit(1);
+    if (row === undefined) return null;
+    const accounts = await this.db.select().from(tokenLargestAccounts).where(eq(tokenLargestAccounts.snapshotId, row.id));
+    const mintObservation = reviveMint(row.mintObservation);
+    const concentration = reviveConcentration(row.concentration);
+    return {
+      id: row.id, tokenMint: row.tokenMint,
+      supply: row.rawSupply === null || row.decimals === null || row.supplySlot === null ? null : { rawSupply: BigInt(row.rawSupply), decimals: row.decimals, slot: row.supplySlot, observedAt: row.observedAt, provenance: "SOLANA_GET_TOKEN_SUPPLY" },
+      mint: mintObservation,
+      largestAccounts: accounts.map((account) => ({ ...account, rawBalance: BigInt(account.rawBalance), ownerClassification: "UNKNOWN", provenance: "SOLANA_GET_TOKEN_LARGEST_ACCOUNTS" })),
+      concentration, confidence: row.confidence as TokenIntelligenceSnapshot["confidence"], completeness: row.completeness, reasons: row.reasons, observedAt: row.observedAt
+    };
+  }
+  async insertTokenRiskEvaluation(evaluation: TokenRiskEvaluation): Promise<void> { await this.db.insert(tokenRiskEvaluations).values(evaluation); }
+  async listRecentTokenRiskEvaluations(limit: number): Promise<TokenRiskEvaluation[]> {
+    const rows = await this.db.select().from(tokenRiskEvaluations).orderBy(desc(tokenRiskEvaluations.evaluatedAt)).limit(limit);
+    return rows.map((row) => ({ ...row, confidence: row.confidence as TokenRiskEvaluation["confidence"], components: row.components }));
+  }
+  async upsertLiveSubscriptionState(state: LiveSubscriptionState): Promise<void> {
+    await this.db.insert(liveSubscriptionState).values(state).onConflictDoUpdate({ target: liveSubscriptionState.wallet, set: state });
+  }
+  async getLiveSubscriptionState(wallet: string): Promise<LiveSubscriptionState | null> {
+    const [row] = await this.db.select().from(liveSubscriptionState).where(eq(liveSubscriptionState.wallet, wallet)).limit(1);
+    return row === undefined ? null : { ...row, lifecycle: row.lifecycle as LiveSubscriptionState["lifecycle"] };
+  }
+  async listLiveSubscriptionStates(): Promise<LiveSubscriptionState[]> {
+    const rows = await this.db.select().from(liveSubscriptionState).orderBy(desc(liveSubscriptionState.priority));
+    return rows.map((row) => ({ ...row, lifecycle: row.lifecycle as LiveSubscriptionState["lifecycle"] }));
+  }
+  async insertShadowPositionRecord(record: ShadowPositionRecord): Promise<void> {
+    await this.db.insert(shadowPositionRecords).values({ ...record, context: serializeBigInts(record.context) as ShadowPositionContext });
+  }
+  async getShadowPositionRecord(positionId: string): Promise<ShadowPositionRecord | null> {
+    const [row] = await this.db.select().from(shadowPositionRecords).where(eq(shadowPositionRecords.positionId, positionId)).limit(1);
+    return row === undefined ? null : { ...row, context: reviveShadowContext(row.context) };
+  }
+  async insertPositionMark(mark: PositionMark): Promise<void> { await this.db.insert(positionMarks).values(mark); }
+  async listPositionMarks(positionId: string, limit: number): Promise<PositionMark[]> {
+    const rows = await this.db.select().from(positionMarks).where(eq(positionMarks.positionId, positionId)).orderBy(desc(positionMarks.observedAt)).limit(limit);
+    return rows.map((row) => ({ ...row, confidence: row.confidence as PositionMark["confidence"], provenance: row.provenance as PositionMark["provenance"] }));
+  }
+  async insertExitRecommendation(recommendation: ExitRecommendation): Promise<void> { await this.db.insert(exitRecommendations).values(recommendation); }
+  async listExitRecommendations(positionId: string, limit: number): Promise<ExitRecommendation[]> {
+    const rows = await this.db.select().from(exitRecommendations).where(eq(exitRecommendations.positionId, positionId)).orderBy(desc(exitRecommendations.createdAt)).limit(limit);
+    return rows.map((row) => ({ ...row, recommendation: row.recommendation as ExitRecommendation["recommendation"], confidence: row.confidence as ExitRecommendation["confidence"] }));
+  }
+  async listPositionEvents(positionId: string, limit: number): Promise<PositionEvent[]> {
+    const rows = await this.db.select().from(positionEvents).where(eq(positionEvents.positionId, positionId)).orderBy(desc(positionEvents.createdAt)).limit(limit);
+    return rows.map((row) => ({ ...row, type: row.type as PositionEvent["type"] }));
+  }
+  async insertNotification(record: NotificationRecord): Promise<"inserted" | "duplicate"> {
+    const rows = await this.db.insert(notifications).values({ ...record, type: record.category }).onConflictDoNothing({ target: notifications.idempotencyKey }).returning({ id: notifications.id });
+    return rows.length === 0 ? "duplicate" : "inserted";
+  }
+  async updateNotification(record: NotificationRecord): Promise<void> {
+    await this.db.update(notifications).set({ type: record.category, payload: record.payload, provider: record.provider, status: record.status, errorCode: record.errorCode, attemptedAt: record.attemptedAt, deliveredAt: record.deliveredAt }).where(eq(notifications.id, record.id));
+  }
+  async listNotifications(limit: number): Promise<NotificationRecord[]> {
+    const rows = await this.db.select().from(notifications).orderBy(desc(notifications.createdAt)).limit(limit);
+    return rows.map((row) => ({ id: row.id, category: row.type as NotificationRecord["category"], payload: row.payload, provider: row.provider, status: row.status as NotificationRecord["status"], errorCode: row.errorCode, createdAt: row.createdAt, attemptedAt: row.attemptedAt, deliveredAt: row.deliveredAt, idempotencyKey: row.idempotencyKey ?? row.id }));
+  }
+  async insertCandidateDiscovery(discovery: CandidateDiscovery): Promise<"inserted" | "duplicate"> {
+    const rows = await this.db.insert(candidateDiscoveries).values(discovery).onConflictDoNothing({ target: candidateDiscoveries.idempotencyKey }).returning({ id: candidateDiscoveries.id });
+    return rows.length === 0 ? "duplicate" : "inserted";
+  }
+  async listCandidateDiscoveries(wallet: string): Promise<CandidateDiscovery[]> {
+    const rows = await this.db.select().from(candidateDiscoveries).where(eq(candidateDiscoveries.wallet, wallet)).orderBy(desc(candidateDiscoveries.lastObservedAt));
+    return rows.map((row) => ({ ...row, confidence: row.confidence as CandidateDiscovery["confidence"] }));
+  }
+  async insertForwardReturnObservation(observation: ForwardReturnObservation): Promise<"inserted" | "duplicate"> {
+    const rows = await this.db.insert(forwardReturnObservations).values(observation).onConflictDoNothing({ target: forwardReturnObservations.idempotencyKey }).returning({ id: forwardReturnObservations.id });
+    return rows.length === 0 ? "duplicate" : "inserted";
+  }
+  async listForwardReturnObservations(wallet: string): Promise<ForwardReturnObservation[]> {
+    const rows = await this.db.select().from(forwardReturnObservations).where(eq(forwardReturnObservations.wallet, wallet)).orderBy(desc(forwardReturnObservations.observedAt));
+    return rows.map((row) => ({ ...row, status: row.status as ForwardReturnObservation["status"] }));
+  }
+  async upsertWalletReputation(snapshot: WalletReputationSnapshot): Promise<void> {
+    await this.db.insert(walletReputationSnapshots).values({ id: snapshot.id, wallet: snapshot.wallet, snapshot, calculatedAt: snapshot.calculatedAt }).onConflictDoUpdate({ target: walletReputationSnapshots.wallet, set: { id: snapshot.id, snapshot, calculatedAt: snapshot.calculatedAt } });
+  }
   async insertDecision(decision: TradeDecision): Promise<void> { await this.db.insert(tradeDecisions).values(decision); }
   async createPosition(position: PaperPosition): Promise<"inserted" | "duplicate"> {
     const entryMarketSnapshot = { ...position.entryMarketSnapshot, expectedOutputRaw: position.entryMarketSnapshot.expectedOutputRaw?.toString() ?? null } as unknown as PaperPosition["entryMarketSnapshot"];
@@ -133,5 +240,29 @@ export function createPostgresStore(databaseUrl: string): { store: PostgresIntel
     store: new PostgresIntelligenceStore(db),
     close: async () => { await client.end(); },
     ping: async () => { await client`select 1`; }
+  };
+}
+
+function serializeBigInts(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value, (_key, item: unknown) => typeof item === "bigint" ? item.toString() : item)) as unknown;
+}
+
+function reviveMint(value: TokenMintObservation): TokenMintObservation {
+  return {
+    ...value,
+    rawSupply: value.rawSupply === null ? null : BigInt(String(value.rawSupply)),
+    slot: value.slot === null ? null : BigInt(String(value.slot))
+  };
+}
+
+function reviveConcentration(value: TokenConcentrationObservation): TokenConcentrationObservation {
+  return { ...value, knownOwners: value.knownOwners.map((owner) => ({ ...owner, rawBalance: BigInt(String(owner.rawBalance)) })) };
+}
+
+function reviveShadowContext(value: ShadowPositionContext): ShadowPositionContext {
+  return {
+    ...value,
+    sourceOutputRawAmount: value.sourceOutputRawAmount === null ? null : BigInt(String(value.sourceOutputRawAmount)),
+    simulatedOutputRawAmount: BigInt(String(value.simulatedOutputRawAmount))
   };
 }

@@ -13,18 +13,33 @@ const environmentSchema = z.object({
   SOLANA_NETWORK: z.string().default("mainnet-beta"),
   SOLANA_RPC_URL: z.url(),
   SOLANA_WS_URL: z.url().refine((value) => value.startsWith("ws://") || value.startsWith("wss://"), "SOLANA_WS_URL must use ws:// or wss://"),
+  LIVE_PROVIDER_MODE: z.enum(["STANDARD_WS", "HELIUS_WEBHOOK"]).default("STANDARD_WS"),
+  MAX_LIVE_SUBSCRIPTIONS: z.coerce.number().int().min(1).max(1_000).default(100),
+  WS_RECONNECT_BASE_MS: z.coerce.number().int().min(100).max(30_000).default(500),
+  WS_RECONNECT_CAP_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
+  WS_LIVENESS_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(600_000).default(45_000),
+  GAP_RECOVERY_LIMIT: z.coerce.number().int().min(1).max(1_000).default(100),
+  POSITION_MARK_INTERVAL_MS: z.coerce.number().int().min(5_000).max(3_600_000).default(30_000),
+  PROVIDER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+  TOKEN_INTELLIGENCE_CACHE_MS: z.coerce.number().int().min(0).max(3_600_000).default(30_000),
+  FORWARD_RETURN_WINDOWS_MS: z.string().default("60000,300000,900000,3600000").transform((value) => value.split(",").map((item) => Number(item.trim()))).pipe(z.array(z.number().int().min(1_000).max(86_400_000)).min(1).max(8)),
   HELIUS_API_KEY: optionalSecret,
   HELIUS_RPC_URL: z.url().default("https://mainnet.helius-rpc.com"),
   HELIUS_WEBHOOK_AUTH: optionalSecret,
   JUPITER_API_KEY: optionalSecret,
   OPENROUTER_API_KEY: optionalSecret,
   OPENROUTER_MODEL: z.string().min(1).default("openrouter/free"),
+  TELEGRAM_BOT_TOKEN: optionalSecret,
+  TELEGRAM_CHAT_ID: optionalSecret,
+  DASHBOARD_PUBLIC_URL: z.preprocess((value) => value === "" ? undefined : value, z.url().optional()),
   EXECUTION_MODE: z.enum(["PAPER", "SHADOW", "LIVE"]).default("PAPER"),
   PAPER_TRADE_USD: positiveUsd.default("1"),
   MAX_TRADE_USD: positiveUsd.default("5"),
   MAX_PAPER_QUOTE_AGE_MS: z.coerce.number().int().min(100).max(30_000).default(2_000),
   HISTORY_MAX_TRANSACTIONS: z.coerce.number().int().min(1).max(1_000).default(100),
   HISTORY_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
+  STABLE_TOKEN_MINT: z.string().min(32).max(44).default("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+  STABLE_TOKEN_DECIMALS: z.coerce.number().int().min(0).max(18).default(6),
   RECOGNIZED_INPUT_MINTS: z.string().default("SOL,So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
 });
 
@@ -60,6 +75,9 @@ export function safeConfigSummary(config: AppConfig): Record<string, string | nu
     maxTradeUsd: config.MAX_TRADE_USD,
     heliusEnabled: config.HELIUS_API_KEY !== undefined,
     openRouterEnabled: config.OPENROUTER_API_KEY !== undefined,
-    jupiterEnabled: config.JUPITER_API_KEY !== undefined
+    jupiterEnabled: config.JUPITER_API_KEY !== undefined,
+    telegramEnabled: config.TELEGRAM_BOT_TOKEN !== undefined && config.TELEGRAM_CHAT_ID !== undefined,
+    liveProviderMode: config.LIVE_PROVIDER_MODE,
+    maximumLiveSubscriptions: config.MAX_LIVE_SUBSCRIPTIONS
   };
 }

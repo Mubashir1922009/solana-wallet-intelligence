@@ -1,5 +1,6 @@
 import type {
   ChainTransaction,
+  AIAnalysis,
   PaperPosition,
   PositionEvent,
   Signal,
@@ -14,6 +15,7 @@ import type { WalletBackfillRun } from "./domain.js";
 import type { CopyabilityEvaluation } from "./copyability.js";
 import type { CrowdingObservation } from "./crowding.js";
 import type { MarketObservation } from "./market.js";
+import type { CandidateDiscovery, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, PositionMark, ShadowPositionRecord, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletReputationSnapshot } from "./runtime-domain.js";
 
 export interface IntelligenceStore {
   upsertWallet(publicKey: string, now: string): Promise<Wallet>;
@@ -21,10 +23,12 @@ export interface IntelligenceStore {
   listWallets(): Promise<Array<Wallet & { metrics: WalletMetrics | null }>>;
   setWalletStatus(publicKey: string, status: WalletStatus, now: string): Promise<Wallet | null>;
   upsertWalletMetrics(metrics: WalletMetrics): Promise<void>;
+  insertAIAnalysis(analysis: AIAnalysis): Promise<void>;
   insertTransaction(transaction: ChainTransaction): Promise<"inserted" | "duplicate">;
   getTransaction(signature: string): Promise<ChainTransaction | null>;
   insertWalletAction(action: WalletAction): Promise<"inserted" | "duplicate">;
   listWalletActions(publicKey: string, limit: number): Promise<WalletAction[]>;
+  listRecentWalletActions(limit: number): Promise<WalletAction[]>;
   insertSignal(signal: Signal): Promise<"inserted" | "duplicate">;
   getSignal(id: string): Promise<Signal | null>;
   listSignals(): Promise<Signal[]>;
@@ -35,6 +39,28 @@ export interface IntelligenceStore {
   listRecentCopyability(limit: number): Promise<CopyabilityEvaluation[]>;
   insertCrowdingObservation(observation: CrowdingObservation): Promise<"inserted" | "duplicate">;
   insertBackfillRun(run: WalletBackfillRun): Promise<void>;
+  insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void>;
+  getTokenIntelligenceSnapshot(mint: string): Promise<TokenIntelligenceSnapshot | null>;
+  insertTokenRiskEvaluation(evaluation: TokenRiskEvaluation): Promise<void>;
+  listRecentTokenRiskEvaluations(limit: number): Promise<TokenRiskEvaluation[]>;
+  upsertLiveSubscriptionState(state: LiveSubscriptionState): Promise<void>;
+  getLiveSubscriptionState(wallet: string): Promise<LiveSubscriptionState | null>;
+  listLiveSubscriptionStates(): Promise<LiveSubscriptionState[]>;
+  insertShadowPositionRecord(record: ShadowPositionRecord): Promise<void>;
+  getShadowPositionRecord(positionId: string): Promise<ShadowPositionRecord | null>;
+  insertPositionMark(mark: PositionMark): Promise<void>;
+  listPositionMarks(positionId: string, limit: number): Promise<PositionMark[]>;
+  insertExitRecommendation(recommendation: ExitRecommendation): Promise<void>;
+  listExitRecommendations(positionId: string, limit: number): Promise<ExitRecommendation[]>;
+  listPositionEvents(positionId: string, limit: number): Promise<PositionEvent[]>;
+  insertNotification(record: NotificationRecord): Promise<"inserted" | "duplicate">;
+  updateNotification(record: NotificationRecord): Promise<void>;
+  listNotifications(limit: number): Promise<NotificationRecord[]>;
+  insertCandidateDiscovery(discovery: CandidateDiscovery): Promise<"inserted" | "duplicate">;
+  listCandidateDiscoveries(wallet: string): Promise<CandidateDiscovery[]>;
+  insertForwardReturnObservation(observation: ForwardReturnObservation): Promise<"inserted" | "duplicate">;
+  listForwardReturnObservations(wallet: string): Promise<ForwardReturnObservation[]>;
+  upsertWalletReputation(snapshot: WalletReputationSnapshot): Promise<void>;
   insertDecision(decision: TradeDecision): Promise<void>;
   createPosition(position: PaperPosition): Promise<"inserted" | "duplicate">;
   getPosition(id: string): Promise<PaperPosition | null>;

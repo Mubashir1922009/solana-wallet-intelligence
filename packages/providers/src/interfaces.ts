@@ -84,9 +84,11 @@ export interface AIProvider {
   analyze<TSchema extends z.ZodType>(request: AIRequest<TSchema>): Promise<AIResult<z.infer<TSchema>>>;
 }
 
-export type NotificationType = "high_confidence_signal" | "paper_buy_opened" | "live_buy_executed" | "major_risk_change" | "source_wallet_exit" | "sell_recommendation" | "system_degraded" | "kill_switch_triggered";
+export type NotificationType = "high_confidence_signal" | "paper_buy_opened" | "major_risk_change" | "source_wallet_exit" | "sell_recommendation" | "system_degraded" | "kill_switch_triggered" | "SHADOW_BUY" | "HIGH_SIGNAL_WALLET" | "TOKEN_RISK_CHANGE" | "SOURCE_WALLET_SELL" | "EXIT_RECOMMENDATION" | "SYSTEM_DEGRADED" | "WATCHER_RECONNECTED" | "WATCHER_GAP_RECOVERED" | "KILL_SWITCH";
 
 export interface NotificationProvider {
+  readonly name?: string;
+  readonly enabled?: boolean;
   notify(type: NotificationType, payload: JsonValue): Promise<void>;
 }
 

@@ -10,11 +10,13 @@ async function main(): Promise<void> {
     "wallets", "wallet_metrics", "tokens", "token_risk_snapshots", "chain_transactions", "transaction_wallets",
     "wallet_actions", "signals", "trade_decisions", "paper_positions", "position_events", "ai_analyses",
     "user_actions", "notifications", "system_health", "webhook_deliveries", "market_observations",
-    "copyability_evaluations", "crowding_observations", "wallet_backfill_runs"
+    "copyability_evaluations", "crowding_observations", "wallet_backfill_runs", "token_intelligence_snapshots",
+    "token_largest_accounts", "token_risk_evaluations", "live_subscription_state", "shadow_position_records",
+    "position_marks", "exit_recommendations", "candidate_discoveries", "forward_return_observations", "wallet_reputation_snapshots"
   ];
   const missing = requiredTables.filter((table) => !sql.includes(`CREATE TABLE "${table}"`));
   if (missing.length > 0) throw new Error(`Migration is missing required tables: ${missing.join(", ")}`);
-  const requiredConstraints = ["\"signature\" text PRIMARY KEY", "paper_positions_signal_uidx", "position_events_idempotency_uidx", "signals_source_tx_wallet_token_uidx", "wallet_actions_signature_wallet_type_uidx", "copyability_source_tx_uidx", "crowding_source_tx_uidx"];
+  const requiredConstraints = ["\"signature\" text PRIMARY KEY", "paper_positions_signal_uidx", "position_events_idempotency_uidx", "signals_source_tx_wallet_token_uidx", "wallet_actions_signature_wallet_type_uidx", "copyability_source_tx_uidx", "crowding_source_tx_uidx", "candidate_discoveries_idempotency_uidx", "forward_return_idempotency_uidx", "notifications_idempotency_uidx", "token_largest_snapshot_account_uidx"];
   for (const requiredConstraint of requiredConstraints) {
     if (!sql.includes(requiredConstraint)) throw new Error(`Migration is missing idempotency constraint: ${requiredConstraint}`);
   }

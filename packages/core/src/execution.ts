@@ -99,8 +99,27 @@ export class PaperPositionService {
 
   async recommendExit(positionId: string, recommendation: string): Promise<PaperPosition> {
     const position = await this.requireOpen(positionId);
-    const updated = { ...position, state: "sell_recommended" as const, exitRecommendation: recommendation, updatedAt: new Date().toISOString() };
+    const updated = { ...position, state: position.state === "manual_control" ? "manual_control" as const : "sell_recommended" as const, exitRecommendation: recommendation, updatedAt: new Date().toISOString() };
     await this.store.updatePosition(updated);
+    return updated;
+  }
+
+  async takeManualControl(positionId: string): Promise<PaperPosition> {
+    const position = await this.requireOpen(positionId);
+    const now = new Date().toISOString();
+    const updated = { ...position, state: "manual_control" as const, updatedAt: now };
+    await this.store.updatePosition(updated);
+    await this.audit(positionId, "manual_control_enabled", "manual_mode_enabled", {}, `manual-control:${positionId}`, now);
+    return updated;
+  }
+
+  async returnSystemControl(positionId: string): Promise<PaperPosition> {
+    const position = await this.requireOpen(positionId);
+    if (position.state !== "manual_control") throw new Error("Invalid position transition: position is not under manual control");
+    const now = new Date().toISOString();
+    const updated = { ...position, state: position.exitRecommendation === null ? "open" as const : "sell_recommended" as const, updatedAt: now };
+    await this.store.updatePosition(updated);
+    await this.audit(positionId, "system_control_restored", "ai_control_restored", {}, `system-control:${positionId}`, now);
     return updated;
   }
 
