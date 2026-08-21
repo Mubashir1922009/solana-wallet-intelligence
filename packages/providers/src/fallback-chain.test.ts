@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { ChainDataProvider, WalletHistoryResult } from "./interfaces.js";
 import { FallbackChainDataProvider, type FallbackNotice } from "./fallback-chain.js";
 
-function provider(name: string, behavior: { fail?: boolean; complete?: boolean } = {}): ChainDataProvider & { calls: number } {
+function provider(name: string, behavior: { fail?: boolean; complete?: boolean; paginationLimited?: boolean } = {}): ChainDataProvider & { calls: number } {
   return {
     name,
-    historyMode: name === "helius" ? "HELIUS_GTFA" : "STANDARD_RPC",
+    historyMode: "STANDARD_RPC",
     calls: 0,
     async fetchWalletSignatures() { this.calls += 1; if (behavior.fail) throw new Error(`failed https://rpc.invalid?api-key=secret-${name}`); return { items: [], nextBefore: null }; },
-    async fetchWalletHistory(): Promise<WalletHistoryResult> { this.calls += 1; if (behavior.fail) throw new Error("history failed"); return { signatures: [], transactions: [], diagnostics: { mode: this.historyMode, signaturesFetched: 0, transactionsFetched: 0, transactionsMissing: behavior.complete === false ? 1 : 0, failures: [], totalDurationMs: 1, totalRpcLatencyMs: 1, complete: behavior.complete !== false } }; },
+    async fetchWalletHistory(): Promise<WalletHistoryResult> { this.calls += 1; if (behavior.fail) throw new Error("history failed"); return { signatures: [], transactions: [], diagnostics: { mode: this.historyMode, signaturesFetched: 0, transactionsFetched: 0, transactionsMissing: behavior.complete === false && behavior.paginationLimited !== true ? 1 : 0, failures: [], totalDurationMs: 1, totalRpcLatencyMs: 1, complete: behavior.complete !== false, ...(behavior.paginationLimited === true ? { completenessState: "PARTIAL_PAGINATION_LIMIT" as const } : {}) } }; },
     async fetchTransaction() { this.calls += 1; if (behavior.fail) throw new Error("transaction failed"); return null; }
   };
 }
@@ -50,5 +50,16 @@ describe("health-aware chain provider fallback", () => {
 
     expect(primary.calls).toBe(1);
     expect(fallback.calls).toBe(1);
+  });
+
+  it("does not degrade a healthy provider at an intentional pagination bound", async () => {
+    const primary = provider("helius", { complete: false, paginationLimited: true }); const fallback = provider("standard");
+    const chain = new FallbackChainDataProvider(primary, fallback, () => undefined);
+
+    const result = await chain.fetchWalletHistory({ address: "wallet", maxPages: 1 });
+
+    expect(result.diagnostics.completenessState).toBe("PARTIAL_PAGINATION_LIMIT");
+    expect(fallback.calls).toBe(0);
+    expect(chain.snapshot().activeProvider).toBe("helius");
   });
 });

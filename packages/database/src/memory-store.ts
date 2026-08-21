@@ -181,8 +181,8 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
     if ([...this.runtimeJobs.values()].some((item) => item.idempotencyKey === job.idempotencyKey)) return "duplicate";
     this.runtimeJobs.set(job.id, job); return "inserted";
   }
-  async claimRuntimeJobs(workerId: string, now: string, leaseExpiresAt: string, limit: number): Promise<RuntimeJob[]> {
-    const eligible = [...this.runtimeJobs.values()].filter((job) => job.attempts < job.maxAttempts && ((job.status === "PENDING" && job.runAt <= now) || (job.status === "RUNNING" && job.leaseExpiresAt !== null && job.leaseExpiresAt <= now))).sort((a, b) => a.runAt.localeCompare(b.runAt)).slice(0, limit);
+  async claimRuntimeJobs(workerId: string, now: string, leaseExpiresAt: string, limit: number, idempotencyKeyPrefix?: string): Promise<RuntimeJob[]> {
+    const eligible = [...this.runtimeJobs.values()].filter((job) => (idempotencyKeyPrefix === undefined || job.idempotencyKey.startsWith(idempotencyKeyPrefix)) && job.attempts < job.maxAttempts && ((job.status === "PENDING" && job.runAt <= now) || (job.status === "RUNNING" && job.leaseExpiresAt !== null && job.leaseExpiresAt <= now))).sort((a, b) => a.runAt.localeCompare(b.runAt)).slice(0, limit);
     return eligible.map((job) => { const claimed: RuntimeJob = { ...job, status: "RUNNING", startedAt: job.startedAt ?? now, attempts: job.attempts + 1, leaseOwner: workerId, leaseExpiresAt }; this.runtimeJobs.set(job.id, claimed); return claimed; });
   }
   async completeRuntimeJob(id: string, workerId: string, completedAt: string): Promise<boolean> {

@@ -74,7 +74,7 @@ export interface IntelligenceStore {
   appendUserAction(action: UserAction): Promise<void>;
   listRecentEvents(limit: number): Promise<PositionEvent[]>;
   enqueueRuntimeJob(job: RuntimeJob): Promise<"inserted" | "duplicate">;
-  claimRuntimeJobs(workerId: string, now: string, leaseExpiresAt: string, limit: number): Promise<RuntimeJob[]>;
+  claimRuntimeJobs(workerId: string, now: string, leaseExpiresAt: string, limit: number, idempotencyKeyPrefix?: string): Promise<RuntimeJob[]>;
   completeRuntimeJob(id: string, workerId: string, completedAt: string): Promise<boolean>;
   failRuntimeJob(id: string, workerId: string, now: string, retryAt: string, errorCode: string): Promise<RuntimeJob | null>;
   listRuntimeJobs(limit: number): Promise<RuntimeJob[]>;

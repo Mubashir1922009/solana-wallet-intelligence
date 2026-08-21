@@ -9,6 +9,9 @@ export interface WalletHistoryRequest {
   until?: string;
   commitment?: "confirmed" | "finalized";
   concurrency?: number;
+  maxPages?: number;
+  maxSignatures?: number;
+  minimumBlockTime?: string;
 }
 
 export interface WalletHistoryItem {
@@ -25,6 +28,13 @@ export interface WalletHistoryPage {
 
 export type HistoryMode = "HELIUS_GTFA" | "STANDARD_RPC" | "UNAVAILABLE";
 
+export type HistoryCompletenessState =
+  | "COMPLETE_WITHIN_REQUESTED_WINDOW"
+  | "PARTIAL_RATE_LIMIT"
+  | "PARTIAL_PROVIDER_FAILURE"
+  | "PARTIAL_PAGINATION_LIMIT"
+  | "UNKNOWN";
+
 export interface WalletHistoryDiagnostics {
   mode: HistoryMode;
   signaturesFetched: number;
@@ -34,6 +44,9 @@ export interface WalletHistoryDiagnostics {
   totalDurationMs: number;
   totalRpcLatencyMs: number;
   complete: boolean;
+  completenessState?: HistoryCompletenessState;
+  pagesFetched?: number;
+  continuationCursor?: string | null;
 }
 
 export interface WalletHistoryResult {

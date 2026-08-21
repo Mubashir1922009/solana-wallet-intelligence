@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { JsonValue, SolanaRpcTransaction } from "@intelligence/core";
-import type { ChainDataProvider, WalletHistoryPage, WalletHistoryRequest, WalletHistoryResult, WalletHistoryItem } from "./interfaces.js";
+import type { ChainDataProvider, HistoryCompletenessState, WalletHistoryPage, WalletHistoryRequest, WalletHistoryResult, WalletHistoryItem } from "./interfaces.js";
 
 export type RpcProviderErrorCode = "HTTP_ERROR" | "RATE_LIMITED" | "TIMEOUT" | "JSON_RPC_ERROR" | "UNSUPPORTED_TRANSACTION_VERSION" | "MALFORMED_RESPONSE";
 
@@ -40,12 +40,14 @@ export interface StandardSolanaRpcOptions {
   historyConcurrency?: number;
   retryDelayMs?: number;
   fetchImplementation?: typeof fetch;
+  random?: () => number;
 }
 
 export class StandardSolanaRpcProvider implements ChainDataProvider {
   readonly name = "standard-solana-rpc";
   readonly historyMode = "STANDARD_RPC" as const;
   private readonly request: typeof fetch;
+  private readonly transactionCache = new Map<string, SolanaRpcTransaction | null>();
 
   constructor(private readonly options: StandardSolanaRpcOptions) { this.request = options.fetchImplementation ?? fetch; }
 
@@ -54,13 +56,52 @@ export class StandardSolanaRpcProvider implements ChainDataProvider {
   }
 
   async fetchTransaction(signature: string): Promise<SolanaRpcTransaction | null> {
-    return (await this.fetchTransactionWithLatency(signature)).value;
+    const cached = this.transactionCache.get(signature);
+    if (cached !== undefined || this.transactionCache.has(signature)) return cached ?? null;
+    const value = (await this.fetchTransactionWithLatency(signature)).value;
+    this.cacheTransaction(signature, value);
+    return value;
   }
 
   async fetchWalletHistory(request: WalletHistoryRequest): Promise<WalletHistoryResult> {
     const started = Date.now();
-    const signatureResult = await this.fetchWalletSignaturesWithLatency(request);
-    const signatures = signatureResult.value.items;
+    const maximumPages = Math.min(20, Math.max(1, request.maxPages ?? 1));
+    const maximumSignatures = Math.min(5_000, Math.max(1, request.maxSignatures ?? request.limit ?? 100));
+    const pageSize = Math.min(1000, maximumSignatures);
+    const minimumBlockTimeMs = request.minimumBlockTime === undefined ? null : Date.parse(request.minimumBlockTime);
+    if (minimumBlockTimeMs !== null && !Number.isFinite(minimumBlockTimeMs)) throw new Error("minimumBlockTime must be an ISO timestamp");
+    const signatures: WalletHistoryItem[] = [];
+    const seen = new Set<string>();
+    let before = request.before;
+    let signatureLatencyMs = 0;
+    let pagesFetched = 0;
+    let reachedNaturalEnd = false;
+    let reachedTimeCutoff = false;
+    while (pagesFetched < maximumPages && signatures.length < maximumSignatures) {
+      const requestedPageLimit = Math.min(pageSize, maximumSignatures - signatures.length);
+      const signatureResult = await this.fetchWalletSignaturesWithLatency({
+        ...request,
+        limit: requestedPageLimit,
+        ...(before === undefined ? {} : { before })
+      });
+      pagesFetched += 1;
+      signatureLatencyMs += signatureResult.latencyMs;
+      for (const item of signatureResult.value.items) {
+        if (minimumBlockTimeMs !== null && item.blockTime !== null && Date.parse(item.blockTime) < minimumBlockTimeMs) {
+          reachedTimeCutoff = true;
+          break;
+        }
+        if (!seen.has(item.signature)) {
+          seen.add(item.signature);
+          signatures.push(item);
+        }
+      }
+      if (reachedTimeCutoff || signatureResult.value.items.length < requestedPageLimit || signatureResult.value.nextBefore === null) {
+        reachedNaturalEnd = true;
+        break;
+      }
+      before = signatureResult.value.nextBefore;
+    }
     const transactions: SolanaRpcTransaction[] = [];
     const failures: Array<{ signature: string; code: string }> = [];
     let missing = 0;
@@ -74,8 +115,12 @@ export class StandardSolanaRpcProvider implements ChainDataProvider {
         const item = signatures[index];
         if (item === undefined) return;
         try {
-          const result = await this.fetchTransactionWithLatency(item.signature);
+          const cached = this.transactionCache.get(item.signature);
+          const result = cached !== undefined || this.transactionCache.has(item.signature)
+            ? { value: cached ?? null, latencyMs: 0 }
+            : await this.fetchTransactionWithLatency(item.signature);
           transactionLatencyMs += result.latencyMs;
+          this.cacheTransaction(item.signature, result.value);
           if (result.value === null) missing += 1;
           else transactions.push(result.value);
         } catch (error) {
@@ -84,13 +129,26 @@ export class StandardSolanaRpcProvider implements ChainDataProvider {
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
+    const hasRateLimit = failures.some((failure) => failure.code === "RATE_LIMITED");
+    const paginationLimited = !reachedNaturalEnd && (pagesFetched >= maximumPages || signatures.length >= maximumSignatures);
+    const completenessState: HistoryCompletenessState = hasRateLimit
+      ? "PARTIAL_RATE_LIMIT"
+      : failures.length > 0 || missing > 0
+        ? "PARTIAL_PROVIDER_FAILURE"
+        : paginationLimited
+          ? "PARTIAL_PAGINATION_LIMIT"
+          : "COMPLETE_WITHIN_REQUESTED_WINDOW";
+    const complete = completenessState === "COMPLETE_WITHIN_REQUESTED_WINDOW";
     return {
       signatures, transactions,
       diagnostics: {
         mode: this.historyMode, signaturesFetched: signatures.length, transactionsFetched: transactions.length,
         transactionsMissing: missing, failures, totalDurationMs: Date.now() - started,
-        totalRpcLatencyMs: signatureResult.latencyMs + transactionLatencyMs,
-        complete: missing === 0 && failures.length === 0
+        totalRpcLatencyMs: signatureLatencyMs + transactionLatencyMs,
+        complete,
+        completenessState,
+        pagesFetched,
+        continuationCursor: paginationLimited ? signatures.at(-1)?.signature ?? before ?? null : null
       }
     };
   }
@@ -143,7 +201,10 @@ export class StandardSolanaRpcProvider implements ChainDataProvider {
         });
         if (!response.ok) {
           const code: RpcProviderErrorCode = response.status === 429 ? "RATE_LIMITED" : "HTTP_ERROR";
-          throw new RpcProviderError(code, `Solana RPC ${method} failed with HTTP ${response.status}`, response.status === 429 || response.status >= 500);
+          const retryAfter = parseRetryAfter(response.headers.get("retry-after"));
+          const error = new RpcProviderError(code, `Solana RPC ${method} failed with HTTP ${response.status}`, response.status === 429 || response.status >= 500);
+          Object.assign(error, { retryAfterMs: retryAfter });
+          throw error;
         }
         const payload: unknown = await response.json();
         const rpcError = rpcErrorSchema.safeParse(payload);
@@ -161,10 +222,25 @@ export class StandardSolanaRpcProvider implements ChainDataProvider {
           : new RpcProviderError("HTTP_ERROR", `Solana RPC ${method} request failed`, true);
         lastError = normalized;
         if (!normalized.retryable || attempt === attempts) throw normalized;
-        const delay = this.options.retryDelayMs ?? 100;
-        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay * attempt));
+        const retryAfterMs = "retryAfterMs" in normalized && typeof normalized.retryAfterMs === "number" ? normalized.retryAfterMs : 0;
+        const delay = Math.max(retryAfterMs, (this.options.retryDelayMs ?? 100) * attempt);
+        const jitteredDelay = Math.round(delay * (0.8 + (this.options.random?.() ?? Math.random()) * 0.4));
+        if (jitteredDelay > 0) await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
       }
     }
     throw lastError ?? new RpcProviderError("HTTP_ERROR", `Solana RPC ${method} failed`, false);
   }
+
+  private cacheTransaction(signature: string, transaction: SolanaRpcTransaction | null): void {
+    this.transactionCache.set(signature, transaction);
+    if (this.transactionCache.size > 250) this.transactionCache.delete(this.transactionCache.keys().next().value as string);
+  }
+}
+
+function parseRetryAfter(value: string | null): number {
+  if (value === null) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
 }

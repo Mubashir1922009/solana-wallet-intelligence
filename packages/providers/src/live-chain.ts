@@ -253,16 +253,9 @@ export class StandardSolanaLiveChainProvider implements LiveChainEventProvider {
 
   private startLiveness(): void {
     this.stopLiveness();
-    const timeout = this.options.livenessTimeoutMs ?? 45_000;
-    this.livenessTimer = setInterval(() => {
-      const silenceMs = this.lastMessageAt === 0 ? 0 : Date.now() - this.lastMessageAt;
-      if (silenceMs > timeout) {
-        this.lastError = "liveness_timeout";
-        this.socket?.close(4000, "liveness_timeout");
-      } else if (silenceMs > timeout / 2) {
-        this.send({ jsonrpc: "2.0", id: this.nextRequestId(), method: "getSlot", params: [{ commitment: this.options.commitment ?? "confirmed" }] });
-      }
-    }, Math.max(1_000, Math.floor(timeout / 3)));
+    // Browser-compatible WebSocket clients do not expose ping frames. Wallet log
+    // inactivity is valid and must not be treated as a dead connection; close/error
+    // events remain authoritative until a standards-compliant heartbeat is added.
   }
 
   private stopLiveness(): void { if (this.livenessTimer !== null) clearInterval(this.livenessTimer); this.livenessTimer = null; }

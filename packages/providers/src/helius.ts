@@ -4,18 +4,6 @@ import type { ChainDataProvider, WalletHistoryPage, WalletHistoryRequest, Wallet
 import { StandardSolanaRpcProvider } from "./solana-rpc.js";
 
 const safeNonnegativeInteger = z.number().int().nonnegative().refine(Number.isSafeInteger, "must be a safe integer");
-const signatureItemSchema = z.looseObject({
-  signature: z.string().min(32),
-  slot: safeNonnegativeInteger,
-  err: z.unknown().nullable().optional(),
-  blockTime: safeNonnegativeInteger.nullable()
-});
-
-const historyResponseSchema = z.object({
-  jsonrpc: z.literal("2.0"),
-  result: z.object({ data: z.array(signatureItemSchema), paginationToken: z.string().nullable().optional() })
-});
-
 const enhancedWebhookItemSchema = z.looseObject({
   signature: z.string().min(32),
   slot: safeNonnegativeInteger,
@@ -35,67 +23,31 @@ export interface HeliusProviderOptions {
 
 export class HeliusChainDataProvider implements ChainDataProvider {
   readonly name = "helius";
-  readonly historyMode = "HELIUS_GTFA" as const;
-  private readonly request: typeof fetch;
+  readonly historyMode = "STANDARD_RPC" as const;
   private readonly standardRpc: StandardSolanaRpcProvider;
 
   constructor(private readonly options: HeliusProviderOptions) {
-    this.request = options.fetchImplementation ?? fetch;
     const rpcUrl = new URL(options.rpcUrl);
     rpcUrl.searchParams.set("api-key", options.apiKey);
-    this.standardRpc = new StandardSolanaRpcProvider({ rpcUrl: rpcUrl.toString(), fetchImplementation: this.request });
+    this.standardRpc = new StandardSolanaRpcProvider({
+      rpcUrl: rpcUrl.toString(),
+      maximumAttempts: 2,
+      historyConcurrency: 3,
+      retryDelayMs: 250,
+      ...(options.fetchImplementation === undefined ? {} : { fetchImplementation: options.fetchImplementation })
+    });
   }
 
-  async fetchWalletSignatures(request: WalletHistoryRequest): Promise<WalletHistoryPage> {
-    const limit = Math.min(1000, Math.max(1, request.limit ?? 100));
-    const config: Record<string, unknown> = {
-      transactionDetails: "signatures",
-      limit,
-      sortOrder: "desc",
-      filters: { tokenAccounts: "balanceChanged" }
-    };
-    if (request.before !== undefined) config.paginationToken = request.before;
-    const payload = await this.rpc({ jsonrpc: "2.0", id: "wallet-history", method: "getTransactionsForAddress", params: [request.address, config] });
-    const parsed = historyResponseSchema.parse(payload);
-    return {
-      items: parsed.result.data.map((item) => ({
-        signature: item.signature,
-        slot: BigInt(item.slot),
-        blockTime: item.blockTime === null ? null : new Date(item.blockTime * 1000).toISOString(),
-        succeeded: item.err === undefined ? null : item.err === null
-      })),
-      nextBefore: parsed.result.paginationToken ?? null
-    };
+  fetchWalletSignatures(request: WalletHistoryRequest): Promise<WalletHistoryPage> {
+    return this.standardRpc.fetchWalletSignatures(request);
   }
 
   fetchTransaction(signature: string): Promise<SolanaRpcTransaction | null> {
     return this.standardRpc.fetchTransaction(signature);
   }
 
-  async fetchWalletHistory(request: WalletHistoryRequest): Promise<WalletHistoryResult> {
-    const started = Date.now();
-    const page = await this.fetchWalletSignatures(request);
-    const transactions: SolanaRpcTransaction[] = [];
-    const failures: Array<{ signature: string; code: string }> = [];
-    let missing = 0;
-    let cursor = 0;
-    const concurrency = Math.min(8, Math.max(1, request.concurrency ?? 4), Math.max(1, page.items.length));
-    await Promise.all(Array.from({ length: concurrency }, async () => {
-      while (true) {
-        const item = page.items[cursor];
-        cursor += 1;
-        if (item === undefined) return;
-        try {
-          const transaction = await this.fetchTransaction(item.signature);
-          if (transaction === null) missing += 1;
-          else transactions.push(transaction);
-        } catch { failures.push({ signature: item.signature, code: "TRANSACTION_FETCH_FAILED" }); }
-      }
-    }));
-    return {
-      signatures: page.items, transactions,
-      diagnostics: { mode: this.historyMode, signaturesFetched: page.items.length, transactionsFetched: transactions.length, transactionsMissing: missing, failures, totalDurationMs: Date.now() - started, totalRpcLatencyMs: 0, complete: missing === 0 && failures.length === 0 }
-    };
+  fetchWalletHistory(request: WalletHistoryRequest): Promise<WalletHistoryResult> {
+    return this.standardRpc.fetchWalletHistory(request);
   }
 
   parseWebhook(payload: unknown, receivedAt: string): ProviderTransactionEnvelope[] {
@@ -111,14 +63,6 @@ export class HeliusChainDataProvider implements ChainDataProvider {
       relevantWallets: [...new Set((item.accountData ?? []).map((entry) => entry.account))],
       receivedAt
     }));
-  }
-
-  private async rpc(body: unknown): Promise<unknown> {
-    const url = new URL(this.options.rpcUrl);
-    url.searchParams.set("api-key", this.options.apiKey);
-    const response = await this.request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) throw new Error(`Helius RPC request failed with status ${response.status}`);
-    return await response.json();
   }
 }
 

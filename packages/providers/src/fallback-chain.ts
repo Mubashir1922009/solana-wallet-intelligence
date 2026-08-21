@@ -44,7 +44,7 @@ export class FallbackChainDataProvider implements ChainDataProvider {
     let result: WalletHistoryResult;
     try { result = await this.primary.fetchWalletHistory(request); }
     catch (error) { return this.degradeAndFallback("fetchWalletHistory", error, () => this.fallback.fetchWalletHistory(request)); }
-    if (result.diagnostics.complete) return result;
+    if (result.diagnostics.complete || result.diagnostics.completenessState === "PARTIAL_PAGINATION_LIMIT") return result;
     return this.degradeAndFallback("fetchWalletHistory", new Error(`incomplete history: ${result.diagnostics.transactionsMissing} missing, ${result.diagnostics.failures.length} failed`), () => this.fallback.fetchWalletHistory(request));
   }
 

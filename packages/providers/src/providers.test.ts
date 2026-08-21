@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { parseHeliusWebhookPayload } from "./helius.js";
+import { HeliusChainDataProvider, parseHeliusWebhookPayload } from "./helius.js";
 import { OpenRouterAIProvider } from "./openrouter.js";
 
 describe("provider boundaries", () => {
@@ -10,6 +10,31 @@ describe("provider boundaries", () => {
     const [event] = parseHeliusWebhookPayload(payload, "2026-08-20T12:00:00.000Z");
     expect(event?.signature).toBe("5".repeat(64));
     expect(event?.rawPayload).toMatchObject({ newProviderField: "preserved" });
+  });
+  it("uses only free-compatible standard RPC methods for Helius wallet history", async () => {
+    const methods: string[] = [];
+    const urls: string[] = [];
+    const provider = new HeliusChainDataProvider({
+      rpcUrl: "https://mainnet.helius-rpc.com",
+      apiKey: "test-only-secret",
+      fetchImplementation: async (input, init) => {
+        urls.push(input instanceof Request ? input.url : input instanceof URL ? input.toString() : input);
+        const request = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { method: string };
+        methods.push(request.method);
+        if (request.method === "getSignaturesForAddress") {
+          return new Response(JSON.stringify({ jsonrpc: "2.0", result: [{ signature: "5".repeat(64), slot: 1, err: null, memo: null, blockTime: 1_700_000_000 }] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", result: null }), { status: 200 });
+      }
+    });
+
+    const result = await provider.fetchWalletHistory({ address: "Vote111111111111111111111111111111111111111", limit: 1 });
+
+    expect(methods).toEqual(["getSignaturesForAddress", "getTransaction"]);
+    expect(methods).not.toContain("getTransactionsForAddress");
+    expect(result.diagnostics.mode).toBe("STANDARD_RPC");
+    expect(result.diagnostics.failures).not.toContain("test-only-secret");
+    expect(urls.every((url) => url.includes("test-only-secret"))).toBe(true);
   });
   it("disables OpenRouter cleanly without a key", async () => {
     const provider = new OpenRouterAIProvider({ model: "openrouter/free" });

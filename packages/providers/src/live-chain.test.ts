@@ -70,6 +70,19 @@ describe("standard Solana live watcher", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("does not send unsupported HTTP RPC methods as WebSocket liveness probes", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const provider = new StandardSolanaLiveChainProvider({ wsUrl: "wss://example.test", maximumSubscriptions: 1, livenessTimeoutMs: 30_000, websocketFactory: () => socket as unknown as WebSocketLike, onEvent: () => undefined });
+      const connected = provider.connect(); socket.emit("open"); await connected; await provider.subscribe("wallet-a");
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(socket.sent.map((entry) => (JSON.parse(entry) as { method: string }).method)).toEqual(["logsSubscribe"]);
+      expect(provider.snapshot().status).toBe("CONNECTED");
+      await provider.shutdown();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("ignores duplicate notifications and counts malformed payloads", async () => {
     const socket = new FakeSocket();
     const received = vi.fn();

@@ -25,6 +25,8 @@
     "readiness:report": "tsx scripts/readiness-report.ts",
     "staging:durability": "tsx scripts/staging-verify.ts",
     "staging:verify": "tsx scripts/staging-verify.ts",
+    "helius:validate": "tsx scripts/live-read-validation.ts",
+    "provider:fallback:validate": "tsx scripts/provider-fallback-validation.ts",
     "secrets:generate": "tsx scripts/generate-secrets.ts",
     "maintenance:prune-raw": "tsx scripts/prune-raw-payloads.ts",
     "performance:validate": "tsx scripts/performance-validation.ts"
