@@ -24,7 +24,9 @@ export interface TokenMintObservation {
   freezeAuthority: string | null;
   freezeAuthorityKnown: boolean;
   initialized: boolean | null;
-  extensionsStatus: "NOT_APPLICABLE" | "UNKNOWN_UNSUPPORTED" | "UNKNOWN";
+  extensionsStatus: "NOT_APPLICABLE" | "KNOWN_SUPPORTED" | "UNKNOWN_UNSUPPORTED" | "UNKNOWN";
+  extensions?: string[];
+  unsupportedExtensionPresent?: boolean | null;
   slot: bigint | null;
   observedAt: string;
   provenance: "SOLANA_GET_ACCOUNT_INFO";
@@ -221,6 +223,8 @@ export interface WalletReputationSnapshot {
   medianSignalLatencyMs?: number | null;
   riskGateRejectionFrequency?: number | null;
   independentTokenSampleSize?: number;
+  knownCrowdingSampleCount?: number;
+  unknownCrowdingSampleCount?: number;
 }
 
 export type NotificationCategory = "SHADOW_BUY" | "HIGH_SIGNAL_WALLET" | "TOKEN_RISK_CHANGE" | "SOURCE_WALLET_SELL" | "EXIT_RECOMMENDATION" | "SYSTEM_DEGRADED" | "WATCHER_RECONNECTED" | "WATCHER_GAP_RECOVERED" | "KILL_SWITCH";
@@ -257,6 +261,24 @@ export interface ProviderBudgetSnapshot {
   cacheHits: number;
   deduplicatedRequests: number;
   circuitState: "CLOSED" | "OPEN" | "HALF_OPEN";
+  health: "HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "DISABLED";
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+}
+
+export interface ProviderTelemetrySnapshot {
+  provider: "SOLANA_HTTP" | "SOLANA_WS" | "HELIUS" | "JUPITER" | "TELEGRAM" | "OPENROUTER";
+  health: "HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "DISABLED";
+  callsOrEvents: number | null;
+  errors: number | null;
+  rateLimited: number | null;
+  timeouts: number | null;
+  reconnects: number | null;
+  retries: number | null;
+  averageLatencyMs: number | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  detail: string;
 }
 
 export type RuntimeJobType = "POSITION_MARK" | "FORWARD_RETURN" | "WALLET_BACKFILL" | "REPUTATION_RECALCULATION" | "TOKEN_RISK_REFRESH" | "EXIT_RECALCULATION" | "NOTIFICATION_RETRY" | "GAP_RECOVERY" | "TOKEN_DISCOVERY_POLL" | "CANDIDATE_EVALUATION" | "RUNTIME_CONTROL";
@@ -271,6 +293,23 @@ export interface WorkerLease {
   role: "SHADOW_RUNTIME"; workerId: string; startedAt: string; heartbeatAt: string; leaseExpiresAt: string;
   status: "STARTING" | "HEALTHY" | "STOPPING"; lastProcessedSlot: bigint | null; activeSubscriptions: number;
   queueDepth: number; revision: string | null;
+}
+
+export interface RuntimeSettings {
+  key: "PRIMARY";
+  watcherEnabled: boolean;
+  shadowEntryEnabled: boolean;
+  killSwitch: boolean;
+  updatedAt: string;
+  updatedBy: string;
+  revision: number;
+}
+
+export interface OperatorLoginBucket {
+  clientLabelHash: string;
+  windowStartedAt: string;
+  attempts: number;
+  updatedAt: string;
 }
 
 export interface OperatorSession {

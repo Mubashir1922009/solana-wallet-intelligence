@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocketLike } from "./live-chain.js";
-import { StandardSolanaLiveChainProvider } from "./live-chain.js";
+import { ShardedSolanaLiveChainProvider, StandardSolanaLiveChainProvider } from "./live-chain.js";
 
 class FakeSocket {
   readyState = 1;
@@ -82,5 +82,23 @@ describe("standard Solana live watcher", () => {
     await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
     expect(provider.snapshot()).toMatchObject({ duplicateNotifications: 1, malformedMessages: 1 });
     await provider.shutdown();
+  });
+});
+
+describe("sharded Solana live watcher", () => {
+  it("allocates deterministically within bounded shard capacity", async () => {
+    const sockets = [new FakeSocket(), new FakeSocket()]; let index = 0;
+    const provider = new ShardedSolanaLiveChainProvider({ wsUrl: "wss://example.test", maximumSubscriptions: 4, maximumSubscriptionsPerConnection: 2, maximumShards: 2, websocketFactory: () => sockets[index++] as unknown as WebSocketLike, onEvent: () => undefined });
+    const connected = provider.connect(); sockets.forEach((socket) => socket.emit("open")); await connected;
+    expect(await provider.subscribe("wallet-a")).toBe(true); expect(await provider.subscribe("wallet-b")).toBe(true); expect(await provider.subscribe("wallet-c")).toBe(true); expect(await provider.subscribe("wallet-d")).toBe(true); expect(await provider.subscribe("wallet-e")).toBe(false);
+    expect([provider.shardFor("wallet-a"), provider.shardFor("wallet-b"), provider.shardFor("wallet-c")]).toEqual([0, 0, 1]); expect(provider.snapshot().shards).toHaveLength(2); await provider.shutdown();
+  });
+  it("reconnects only the failed shard and reports its affected wallets", async () => {
+    vi.useFakeTimers();
+    try {
+      const sockets = [new FakeSocket(), new FakeSocket(), new FakeSocket()]; let index = 0; const recovered: Array<{ wallets: string[]; shard: number }> = [];
+      const provider = new ShardedSolanaLiveChainProvider({ wsUrl: "wss://example.test", maximumSubscriptions: 2, maximumSubscriptionsPerConnection: 1, maximumShards: 2, reconnectBaseMs: 10, reconnectCapMs: 10, reconnectJitterRatio: 0, websocketFactory: () => sockets[index++] as unknown as WebSocketLike, onEvent: () => undefined, onReconnect: (wallets, shard) => { recovered.push({ wallets, shard }); } });
+      const connected = provider.connect(); sockets[0]?.emit("open"); sockets[1]?.emit("open"); await connected; await provider.subscribe("wallet-a"); await provider.subscribe("wallet-b"); sockets[1]?.emit("close", { reason: "network" }); await vi.advanceTimersByTimeAsync(10); sockets[2]?.emit("open"); await vi.waitFor(() => expect(recovered).toEqual([{ wallets: ["wallet-b"], shard: 1 }])); expect(provider.snapshot().shards?.[0]?.reconnectCount).toBe(0); expect(provider.snapshot().shards?.[1]?.reconnectCount).toBe(1); await provider.shutdown();
+    } finally { vi.useRealTimers(); }
   });
 });

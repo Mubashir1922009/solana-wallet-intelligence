@@ -15,7 +15,7 @@ import type {
   CopyabilityEvaluation,
   CrowdingObservation
 } from "@intelligence/core";
-import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletBackfillRun, WalletReputationSnapshot, WorkerLease } from "@intelligence/core";
+import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletBackfillRun, WalletReputationSnapshot, WorkerLease } from "@intelligence/core";
 import { newId } from "@intelligence/shared";
 
 export class InMemoryIntelligenceStore implements IntelligenceStore {
@@ -41,6 +41,8 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
   readonly runtimeJobs = new Map<string, RuntimeJob>();
   readonly operatorSessions = new Map<string, OperatorSession>();
   readonly operatorSecurityEvents: OperatorSecurityEvent[] = [];
+  readonly operatorLoginBuckets = new Map<string, OperatorLoginBucket>();
+  runtimeSettings: RuntimeSettings = { key: "PRIMARY", watcherEnabled: true, shadowEntryEnabled: true, killSwitch: false, updatedAt: "1970-01-01T00:00:00.000Z", updatedBy: "migration", revision: 1 };
   readonly telegramInteractions = new Map<string, TelegramInteraction>();
   readonly tokenDiscoveries = new Map<string, TokenDiscovery>();
   readonly candidateEvaluations = new Map<string, CandidateEvaluation>();
@@ -122,6 +124,7 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
     this.crowdingObservations.set(observation.sourceTransactionSignature, observation);
     return "inserted";
   }
+  async listCrowdingObservations(sourceTransactionSignatures: string[]): Promise<CrowdingObservation[]> { const selected = new Set(sourceTransactionSignatures); return [...this.crowdingObservations.values()].filter((item) => selected.has(item.sourceTransactionSignature)); }
   async insertBackfillRun(run: WalletBackfillRun): Promise<void> { this.backfillRuns.push(run); }
   async insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void> { this.tokenIntelligenceSnapshots.set(snapshot.tokenMint, snapshot); }
   async getTokenIntelligenceSnapshot(mint: string): Promise<TokenIntelligenceSnapshot | null> { return this.tokenIntelligenceSnapshots.get(mint) ?? null; }
@@ -197,6 +200,11 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
   async heartbeatWorkerLease(lease: WorkerLease): Promise<boolean> { if (this.workerLease?.workerId !== lease.workerId) return false; this.workerLease = lease; return true; }
   async releaseWorkerLease(workerId: string, now: string): Promise<void> { if (this.workerLease?.workerId === workerId) this.workerLease = { ...this.workerLease, status: "STOPPING", heartbeatAt: now, leaseExpiresAt: now }; }
   async getWorkerLease(): Promise<WorkerLease | null> { return this.workerLease; }
+  async getRuntimeSettings(): Promise<RuntimeSettings> { return { ...this.runtimeSettings }; }
+  async updateRuntimeSettings(settings: RuntimeSettings): Promise<boolean> { if (settings.revision !== this.runtimeSettings.revision + 1) return false; this.runtimeSettings = { ...settings }; return true; }
+  async consumeOperatorLoginAttempt(clientLabelHash: string, now: string, windowStartedAt: string, maximumAttempts: number): Promise<{ allowed: boolean; bucket: OperatorLoginBucket }> { const current = this.operatorLoginBuckets.get(clientLabelHash); const attempts = current === undefined || current.windowStartedAt < windowStartedAt ? 1 : current.attempts + 1; const bucket = { clientLabelHash, windowStartedAt: current === undefined || current.windowStartedAt < windowStartedAt ? now : current.windowStartedAt, attempts, updatedAt: now }; this.operatorLoginBuckets.set(clientLabelHash, bucket); return { allowed: attempts <= maximumAttempts, bucket }; }
+  async getOperatorLoginBucket(clientLabelHash: string): Promise<OperatorLoginBucket | null> { return this.operatorLoginBuckets.get(clientLabelHash) ?? null; }
+  async clearOperatorLoginBucket(clientLabelHash: string): Promise<void> { this.operatorLoginBuckets.delete(clientLabelHash); }
   async createOperatorSession(session: OperatorSession): Promise<void> { this.operatorSessions.set(session.tokenHash, session); }
   async getOperatorSessionByTokenHash(tokenHash: string): Promise<OperatorSession | null> { return this.operatorSessions.get(tokenHash) ?? null; }
   async touchOperatorSession(id: string, at: string): Promise<void> { for (const [hash, session] of this.operatorSessions) if (session.id === id) this.operatorSessions.set(hash, { ...session, lastUsedAt: at }); }

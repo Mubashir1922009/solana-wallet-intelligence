@@ -14,7 +14,7 @@ async function main(): Promise<void> {
     "token_largest_accounts", "token_risk_evaluations", "live_subscription_state", "shadow_position_records",
     "position_marks", "exit_recommendations", "candidate_discoveries", "forward_return_observations", "wallet_reputation_snapshots",
     "runtime_jobs", "worker_leases", "operator_sessions", "operator_security_events", "telegram_interactions", "token_discoveries",
-    "candidate_evaluations", "research_runs"
+    "candidate_evaluations", "research_runs", "schema_revisions", "runtime_settings", "operator_login_buckets"
   ];
   const missing = requiredTables.filter((table) => !sql.includes(`CREATE TABLE "${table}"`));
   if (missing.length > 0) throw new Error(`Migration is missing required tables: ${missing.join(", ")}`);
@@ -22,6 +22,7 @@ async function main(): Promise<void> {
   for (const requiredConstraint of requiredConstraints) {
     if (!sql.includes(requiredConstraint)) throw new Error(`Migration is missing idempotency constraint: ${requiredConstraint}`);
   }
+  if (!sql.includes("runtime-schema-0004")) throw new Error("Migration is missing the authoritative schema revision record");
   console.info(`Validated ${migrations.length} migration(s), ${requiredTables.length} required tables, and ${requiredConstraints.length} idempotency constraints.`);
 }
 

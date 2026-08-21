@@ -23,6 +23,6 @@
 
 - Solana [`getTransaction`](https://solana.com/docs/rpc/http/gettransaction), [`getSignaturesForAddress`](https://solana.com/docs/rpc/http/getsignaturesforaddress), [JSON structures](https://solana.com/docs/rpc/json-structures), and [versioned transactions](https://solana.com/developers/guides/advanced/versions)
 - Helius [`getTransactionsForAddress`](https://www.helius.dev/docs/api-reference/rpc/http/gettransactionsforaddress)
-- Jupiter [Swap V2](https://developers.jup.ag/docs/swap) and [Tokens V2](https://developers.jup.ag/docs/tokens); this implementation omits `taker`, requires transaction to be null/absent, and never invokes execution or submission
+- Jupiter [Swap V2](https://developers.jup.ag/docs/swap) and [Tokens V2](https://developers.jup.ag/docs/tokens). Current Swap V2 documentation says all endpoints require `x-api-key`. The bounded 2026-08-20 rehearsal nevertheless observed keyless HTTP 200 responses from `/swap/v2/order` and Tokens V2; this is empirical behavior, not a documented availability guarantee. Keyless mode therefore stays strictly throttled and degradable. The implementation omits `taker`, accepts only a null/absent transaction, and never invokes execution or submission.
 
 Provider contracts can evolve. Re-verify official schemas before changing request or response fields.

@@ -8,7 +8,7 @@ const tokenAmount = z.object({ amount: z.string().regex(/^\d+$/), decimals: z.nu
 const context = z.object({ slot: safeInteger }).loose();
 const supplyEnvelope = z.object({ jsonrpc: z.literal("2.0"), result: z.object({ context, value: tokenAmount }) });
 const largestEnvelope = z.object({ jsonrpc: z.literal("2.0"), result: z.object({ context, value: z.array(z.object({ address: z.string().min(32), amount: z.string().regex(/^\d+$/), decimals: z.number().int().min(0).max(255) }).loose()).max(20) }) });
-const parsedMintInfo = z.object({ decimals: z.number().int().min(0).max(255), isInitialized: z.boolean(), mintAuthority: z.string().min(32).nullable(), freezeAuthority: z.string().min(32).nullable(), supply: z.string().regex(/^\d+$/) }).loose();
+const parsedMintInfo = z.object({ decimals: z.number().int().min(0).max(255), isInitialized: z.boolean(), mintAuthority: z.string().min(32).nullable(), freezeAuthority: z.string().min(32).nullable(), supply: z.string().regex(/^\d+$/), extensions: z.array(z.looseObject({ extension: z.string().optional() })).optional() }).loose();
 const parsedTokenInfo = z.object({ owner: z.string().min(32), mint: z.string().min(32), tokenAmount }).loose();
 const parsedData = z.object({ program: z.string(), parsed: z.object({ type: z.string(), info: z.unknown() }).loose() }).loose();
 const accountValue = z.object({ owner: z.string().min(32), data: z.union([parsedData, z.tuple([z.string(), z.string()])]) }).loose();
@@ -75,8 +75,11 @@ export class StandardSolanaTokenIntelligenceProvider implements TokenIntelligenc
     if (value === null || Array.isArray(value.data)) return { tokenProgram: program, tokenProgramAddress: value?.owner ?? null, decimals: null, rawSupply: null, mintAuthority: null, mintAuthorityKnown: false, freezeAuthority: null, freezeAuthorityKnown: false, initialized: null, extensionsStatus: program === "TOKEN_2022" ? "UNKNOWN_UNSUPPORTED" : "UNKNOWN", slot: BigInt(data.result.context.slot), observedAt, provenance: "SOLANA_GET_ACCOUNT_INFO", reasons: [...reasons, "MINT_PARSE_UNKNOWN"] };
     const parsed = parsedMintInfo.safeParse(value.data.parsed.info);
     if (!parsed.success || value.data.parsed.type !== "mint") return { tokenProgram: program, tokenProgramAddress: value.owner, decimals: null, rawSupply: null, mintAuthority: null, mintAuthorityKnown: false, freezeAuthority: null, freezeAuthorityKnown: false, initialized: null, extensionsStatus: program === "TOKEN_2022" ? "UNKNOWN_UNSUPPORTED" : "UNKNOWN", slot: BigInt(data.result.context.slot), observedAt, provenance: "SOLANA_GET_ACCOUNT_INFO", reasons: [...reasons, "MINT_PARSE_UNKNOWN"] };
-    if (program === "TOKEN_2022") reasons.push("TOKEN_2022_EXTENSIONS_UNKNOWN");
-    return { tokenProgram: program, tokenProgramAddress: value.owner, decimals: parsed.data.decimals, rawSupply: BigInt(parsed.data.supply), mintAuthority: parsed.data.mintAuthority, mintAuthorityKnown: true, freezeAuthority: parsed.data.freezeAuthority, freezeAuthorityKnown: true, initialized: parsed.data.isInitialized, extensionsStatus: program === "TOKEN_2022" ? "UNKNOWN_UNSUPPORTED" : "NOT_APPLICABLE", slot: BigInt(data.result.context.slot), observedAt, provenance: "SOLANA_GET_ACCOUNT_INFO", reasons };
+    const extensions = parsed.data.extensions?.map((item) => item.extension).filter((item): item is string => item !== undefined) ?? [];
+    const extensionMetadataKnown = parsed.data.extensions !== undefined;
+    if (program === "TOKEN_2022" && !extensionMetadataKnown) reasons.push("TOKEN_2022_EXTENSIONS_UNKNOWN");
+    if (program === "TOKEN_2022" && extensions.length > 0) reasons.push("TOKEN_2022_UNSUPPORTED_EXTENSION_PRESENT");
+    return { tokenProgram: program, tokenProgramAddress: value.owner, decimals: parsed.data.decimals, rawSupply: BigInt(parsed.data.supply), mintAuthority: parsed.data.mintAuthority, mintAuthorityKnown: true, freezeAuthority: parsed.data.freezeAuthority, freezeAuthorityKnown: true, initialized: parsed.data.isInitialized, extensionsStatus: program !== "TOKEN_2022" ? "NOT_APPLICABLE" : !extensionMetadataKnown || extensions.length > 0 ? "UNKNOWN_UNSUPPORTED" : "KNOWN_SUPPORTED", extensions, unsupportedExtensionPresent: program === "TOKEN_2022" ? extensions.length > 0 : false, slot: BigInt(data.result.context.slot), observedAt, provenance: "SOLANA_GET_ACCOUNT_INFO", reasons };
   }
 
   async observeToken(mint: string): Promise<TokenIntelligenceSnapshot> {

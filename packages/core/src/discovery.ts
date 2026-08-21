@@ -103,12 +103,14 @@ export function calculateWalletReputation(wallet: string, forward: ForwardReturn
   const deterioration = copyability.flatMap((item) => item.entryPriceDeteriorationBps === null ? [] : [item.entryPriceDeteriorationBps]);
   const copyable = copyability.filter((item) => item.status === "KNOWN" && (item.entryPriceDeteriorationBps ?? Number.POSITIVE_INFINITY) <= 500).length;
   const uncopyable = copyability.length - copyable;
-  const crowded = crowding.filter((item) => item.status === "OBSERVED" && (item.windows.at(-1)?.followerWalletCount ?? 0) >= 3).length;
+  const knownCrowding = crowding.filter((item) => item.status === "OBSERVED");
+  const unknownCrowding = crowding.length - knownCrowding.length;
+  const crowded = knownCrowding.filter((item) => (item.windows.at(-1)?.followerWalletCount ?? 0) >= 3).length;
   const sampleSize = returns.length;
   const dataCompleteness = forward.length === 0 ? 0 : returns.length / forward.length;
   const returnQuality = medianFollowerReturn === null ? 0.35 : Math.max(0, Math.min(1, (medianFollowerReturn + 0.25) / 0.5));
   const copyableRate = copyability.length === 0 ? 0.35 : copyable / copyability.length;
-  const crowdingPenalty = crowding.length === 0 ? 0.35 : crowded / crowding.length;
+  const crowdingPenalty = knownCrowding.length === 0 ? 0.35 : crowded / knownCrowding.length;
   const raw = 100 * (returnQuality * rules.followerReturnWeight + copyableRate * rules.copyabilityWeight + (1 - crowdingPenalty) * rules.crowdingWeight);
   const sampleConfidence = Math.min(1, sampleSize / rules.minimumSample);
   const provisionalScore = raw * sampleConfidence;
@@ -117,13 +119,14 @@ export function calculateWalletReputation(wallet: string, forward: ForwardReturn
   return {
     id: newId(), wallet, observedCandidateBuys: new Set(forward.map((item) => item.transactionSignature)).size, copyableOpportunities: copyable, uncopyableOpportunities: uncopyable,
     medianFollowerReturn, followerReturnDistribution: [...returns].sort((a, b) => a - b), medianDeteriorationBps: median(deterioration),
-    earlyEntryFrequency: null, crowdingFrequency: crowding.length === 0 ? null : crowded / crowding.length,
+    earlyEntryFrequency: null, crowdingFrequency: knownCrowding.length === 0 ? null : crowded / knownCrowding.length,
     consistency: returns.length < 2 ? null : consistency(returns), sampleSize, dataCompleteness, provisionalScore, calculatedAt,
     rulesetHash: stableHash(rules as unknown as JsonValue), validCopyabilityEvaluations: copyability.filter((item) => item.status === "KNOWN").length,
     noRouteEvents: forward.filter((item) => item.status === "NO_ROUTE").length, trimmedMeanFollowerReturn: trimmed.length === 0 ? null : trimmed.reduce((sum, value) => sum + value, 0) / trimmed.length,
     downsideDistribution: sortedReturns.filter((value) => value < 0), winRate: returns.length === 0 ? null : returns.filter((value) => value > 0).length / returns.length,
     lossRate: returns.length === 0 ? null : returns.filter((value) => value < 0).length / returns.length, maximumObservedFollowerLoss: sortedReturns[0] ?? null,
-    medianSignalLatencyMs: median(signalLatencies), riskGateRejectionFrequency: null, independentTokenSampleSize: new Set(forward.map((item) => item.tokenMint)).size
+    medianSignalLatencyMs: median(signalLatencies), riskGateRejectionFrequency: null, independentTokenSampleSize: new Set(forward.map((item) => item.tokenMint)).size,
+    knownCrowdingSampleCount: knownCrowding.length, unknownCrowdingSampleCount: unknownCrowding
   };
 }
 

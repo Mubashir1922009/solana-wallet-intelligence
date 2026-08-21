@@ -76,4 +76,4 @@ Helius webhook authentication is optional for local development, but when `HELIU
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md), [SECURITY.md](./SECURITY.md), [COPYABILITY.md](./docs/COPYABILITY.md), and the documents under `docs/` before extending provider or execution behavior.
 
-Operational commands: `pnpm research:report`, `pnpm shadow:soak -- --duration=10m --wallet-count=5`, `pnpm performance:validate`, `pnpm maintenance:prune-raw` (dry run), and `pnpm secrets:generate <session|telegram-webhook|password-hash>`.
+Operational commands: `pnpm staging:verify --preflight`, `pnpm shadow:e2e -- --mode=recent-token-research`, `pnpm shadow:soak -- --duration=10m --full --max-wallets=5 --max-recent-tokens=3 --provider-budget=20`, `pnpm research:report`, `pnpm performance:validate`, `pnpm maintenance:prune-raw` (dry run), and `pnpm secrets:generate <session|telegram-webhook|password-hash>`.

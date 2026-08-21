@@ -34,6 +34,8 @@ export class ProviderBudgetManager {
   private deduplicatedRequests = 0;
   private consecutiveTransientFailures = 0;
   private circuitOpenedAt: number | null = null;
+  private lastSuccessAt: string | null = null;
+  private lastFailureAt: string | null = null;
 
   constructor(private readonly options: ProviderBudgetOptions) {}
 
@@ -58,7 +60,7 @@ export class ProviderBudgetManager {
       averageLatencyMs: this.calls === 0 ? null : this.totalLatencyMs / this.calls,
       inFlight: this.inFlight, queued: this.waiters.length, degraded: this.circuitState() !== "CLOSED" || this.rateLimited > 0 || this.timeouts > 0 || this.serverErrors > 0,
       clientErrors: this.clientErrors, serverErrors: this.serverErrors, cacheHits: this.cacheHits, deduplicatedRequests: this.deduplicatedRequests,
-      circuitState: this.circuitState()
+      circuitState: this.circuitState(), health: this.calls === 0 ? "UNAVAILABLE" : this.circuitState() === "OPEN" ? "UNAVAILABLE" : this.rateLimited > 0 || this.timeouts > 0 || this.serverErrors > 0 ? "DEGRADED" : "HEALTHY", lastSuccessAt: this.lastSuccessAt, lastFailureAt: this.lastFailureAt
     };
   }
 
@@ -76,12 +78,14 @@ export class ProviderBudgetManager {
         try {
           const value = await operation(attempt);
           this.successes += 1;
+          this.lastSuccessAt = new Date().toISOString();
           this.consecutiveTransientFailures = 0;
           this.circuitOpenedAt = null;
           this.totalLatencyMs += Math.max(0, (this.options.now ?? Date.now)() - started);
           return value;
         } catch (error) {
           lastError = error;
+          this.lastFailureAt = new Date().toISOString();
           this.totalLatencyMs += Math.max(0, (this.options.now ?? Date.now)() - started);
           const code = errorCode(error);
           if (code === "RATE_LIMITED" || code === "429") this.rateLimited += 1;

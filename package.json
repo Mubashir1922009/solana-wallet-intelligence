@@ -20,6 +20,8 @@
     "db:check": "tsx scripts/validate-migrations.ts",
     "research:report": "tsx scripts/research-report.ts",
     "shadow:soak": "tsx scripts/shadow-soak.ts",
+    "shadow:e2e": "tsx scripts/shadow-e2e.ts",
+    "staging:verify": "tsx scripts/staging-verify.ts",
     "secrets:generate": "tsx scripts/generate-secrets.ts",
     "maintenance:prune-raw": "tsx scripts/prune-raw-payloads.ts",
     "performance:validate": "tsx scripts/performance-validation.ts"
@@ -33,10 +35,11 @@
     "tsx": "4.20.5",
     "typescript": "5.9.2",
     "typescript-eslint": "8.41.0",
-    "vitest": "3.2.4"
+    "vitest": "3.2.6"
   },
   "pnpm": {
     "overrides": {
+      "esbuild": "0.25.12",
       "postcss": "8.5.23",
       "sharp": "0.35.0"
     }

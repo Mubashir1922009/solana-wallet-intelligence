@@ -29,6 +29,7 @@ describe("wallet discovery and reputation", () => {
     expect(result.sampleSize).toBe(2);
     expect(result.provisionalScore).toBeLessThan(20);
   });
+  it("hydrates known crowding while preserving unknown samples", () => { const base = { id: "crowd", sourceWallet: "w", sourceTransactionSignature: "tx", tokenMint: "t", observedAt: "2026-01-01T00:00:00.000Z", windows: [{ windowMs: 60_000, followerWalletCount: 4, followerActionCount: 4, delayMs: [] }], observedInputVolumeRaw: null, observedInputMint: null, monitoredWalletCount: 10, expectedCoverageWalletCount: 10, coverageRatio: 1, confidence: "HIGH" as const, status: "OBSERVED" as const, reasons: [] }; const result = calculateWalletReputation("w", [], [], [base, { ...base, id: "unknown", sourceTransactionSignature: "tx-2", status: "UNKNOWN", confidence: "UNKNOWN", coverageRatio: null }], "2026-01-01T00:00:00.000Z"); expect(result).toMatchObject({ crowdingFrequency: 1, knownCrowdingSampleCount: 1, unknownCrowdingSampleCount: 1 }); });
 
   it("persists scheduled-window research and updates reputation", async () => {
     const store = new InMemoryIntelligenceStore();

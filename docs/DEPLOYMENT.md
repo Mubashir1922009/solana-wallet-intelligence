@@ -1,6 +1,6 @@
 # Remote shadow deployment
 
-Recommended topology: dashboard, API, one worker, PostgreSQL, and optional Redis. Run migration once before starting services. The API exposes `/livez` and `/readyz`; worker health is its PostgreSQL heartbeat surfaced by the API/dashboard.
+Recommended topology: dashboard → API, with API and one worker connected through private networking to PostgreSQL; Redis remains optional. The controlled flow is build → one `pnpm db:migrate` pre-deploy command → API/worker startup → readiness. Migration failure must stop deployment. Never configure migrations independently on horizontally scaled API/worker replicas. The API exposes `/livez` and `/readyz`; worker health is its PostgreSQL heartbeat surfaced by the API/dashboard.
 
 Required production variables: `NODE_ENV=production`, `EXECUTION_MODE=SHADOW`, `DATABASE_URL`, `SOLANA_RPC_URL`, `SOLANA_WS_URL`, `SESSION_SECRET`, `OPERATOR_PASSWORD_HASH`, and `CORS_ALLOWED_ORIGIN`. Optional groups: `REDIS_URL`; Helius values; `JUPITER_API_KEY` plus `JUPITER_AUTH_MODE`; OpenRouter values; and all four Telegram values. `EXECUTION_MODE=LIVE` always fails.
 

@@ -18,7 +18,7 @@ describe("provider rate budget", () => {
     const budget = new ProviderBudgetManager({ provider: "test", concurrency: 1, maximumAttempts: 2, baseBackoffMs: 0, jitterRatio: 0 });
     const value = await budget.run("retry", async (attempt) => { if (attempt === 1) throw new RetryableError("limited"); return "ok"; });
     expect(value).toBe("ok");
-    expect(budget.snapshot()).toMatchObject({ calls: 2, successfulCalls: 1, rateLimited: 1, retries: 1, degraded: true });
+    expect(budget.snapshot()).toMatchObject({ calls: 2, successfulCalls: 1, rateLimited: 1, retries: 1, degraded: true, health: "DEGRADED" });
   });
 
   it("enforces its concurrency ceiling", async () => {

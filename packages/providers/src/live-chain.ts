@@ -14,6 +14,33 @@ export interface LiveConnectionSnapshot {
   malformedMessages: number;
   duplicateNotifications: number;
   lastError: string | null;
+  shards?: LiveConnectionSnapshot[];
+}
+
+export interface ShardedSolanaLiveOptions extends Omit<StandardSolanaLiveOptions, "maximumSubscriptions" | "onReconnect"> {
+  maximumSubscriptions: number;
+  maximumSubscriptionsPerConnection: number;
+  maximumShards: number;
+  onReconnect?: (wallets: string[], shard: number) => Promise<void> | void;
+}
+
+export class ShardedSolanaLiveChainProvider implements LiveChainEventProvider {
+  readonly mode = "STANDARD_WS" as const;
+  readonly name = "standard-solana-websocket-sharded";
+  private readonly shards: StandardSolanaLiveChainProvider[];
+  private readonly walletShard = new Map<string, number>();
+  private readonly perShard: number;
+  constructor(options: ShardedSolanaLiveOptions) {
+    this.perShard = options.maximumSubscriptionsPerConnection;
+    const count = Math.min(options.maximumShards, Math.ceil(options.maximumSubscriptions / this.perShard));
+    this.shards = Array.from({ length: count }, (_, shard) => new StandardSolanaLiveChainProvider({ ...options, maximumSubscriptions: this.perShard, onReconnect: async (wallets) => options.onReconnect?.(wallets, shard) }));
+  }
+  async connect(): Promise<void> { await Promise.all(this.shards.map((shard) => shard.connect())); }
+  async subscribe(wallet: string): Promise<boolean> { const existing = this.walletShard.get(wallet); if (existing !== undefined) return this.shards[existing]?.subscribe(wallet) ?? false; const shard = this.shards.findIndex((candidate) => candidate.snapshot().desiredSubscriptions < this.perShard); if (shard < 0) return false; if (!await this.shards[shard]?.subscribe(wallet)) return false; this.walletShard.set(wallet, shard); return true; }
+  async unsubscribe(wallet: string): Promise<void> { const shard = this.walletShard.get(wallet); if (shard === undefined) return; await this.shards[shard]?.unsubscribe(wallet); this.walletShard.delete(wallet); }
+  async shutdown(): Promise<void> { await Promise.all(this.shards.map((shard) => shard.shutdown())); }
+  shardFor(wallet: string): number | null { return this.walletShard.get(wallet) ?? null; }
+  snapshot(): LiveConnectionSnapshot { const shards = this.shards.map((shard) => shard.snapshot()); const status = shards.every((shard) => shard.status === "CONNECTED") ? "CONNECTED" : shards.every((shard) => shard.status === "SHUTDOWN") ? "SHUTDOWN" : shards.some((shard) => shard.status === "CONNECTING") ? "CONNECTING" : "DISCONNECTED"; return { mode: this.mode, provider: this.name, status, activeSubscriptions: shards.reduce((sum, shard) => sum + shard.activeSubscriptions, 0), desiredSubscriptions: shards.reduce((sum, shard) => sum + shard.desiredSubscriptions, 0), lastEventAt: shards.map((shard) => shard.lastEventAt).filter((value): value is string => value !== null).sort().at(-1) ?? null, lastObservedSlot: shards.reduce<bigint | null>((highest, shard) => shard.lastObservedSlot !== null && (highest === null || shard.lastObservedSlot > highest) ? shard.lastObservedSlot : highest, null), reconnectCount: shards.reduce((sum, shard) => sum + shard.reconnectCount, 0), malformedMessages: shards.reduce((sum, shard) => sum + shard.malformedMessages, 0), duplicateNotifications: shards.reduce((sum, shard) => sum + shard.duplicateNotifications, 0), lastError: shards.find((shard) => shard.lastError !== null)?.lastError ?? null, shards }; }
 }
 
 export interface LiveChainEventProvider {

@@ -44,7 +44,9 @@ Discovery is deliberately limited to evidence present in transactions the system
 
 For observed candidate buys, `FORWARD_RETURN_WINDOWS_MS` creates PostgreSQL jobs for quote-based research observations. Each window persists `VALID_OBSERVATION`, `NO_ROUTE`, or `MISSING_OBSERVATION`; missing quotes never become zero returns. These labels update a provisional wallet-reputation snapshot in which capped follower returns carry more weight than copyability and crowding inputs. Requested time, actual observation time, and lateness are distinct; expired job leases are reclaimed after a crash.
 
-The soak harness defaults to PostgreSQL. When a project database is unavailable, `pnpm shadow:soak -- --store=in-memory --mode=read-only --duration=2m --wallet-count=1 --wallets=<public-key>` validates bounded WebSocket liveness and process metrics only; that mode does not validate database durability or the full shadow pipeline.
+The soak harness defaults to the in-memory contract when a project database is unavailable. `pnpm shadow:soak -- --store=in-memory --duration=2m --max-wallets=1 --wallets=<public-key>` validates transport liveness. `pnpm shadow:soak -- --store=in-memory --duration=5m --full --max-wallets=3 --max-recent-tokens=3 --provider-budget=20` adds bounded real discovery, history, normalization, token-risk, quote, and decision stages. A future staging multi-hour command is `pnpm shadow:soak -- --store=postgres --duration=6h --full --max-wallets=20 --max-recent-tokens=5 --provider-budget=100`; it writes periodic snapshots to ignored `runtime/reports/shadow-soak-latest.json`. Do not infer long-term stability from a short run.
+
+Run the bounded mainnet read-only rehearsal with `pnpm shadow:e2e -- --mode=recent-token-research --max-recent-tokens=3 --max-candidates-per-token=2 --history-transactions=5 --duration-seconds=300`. It never forces BUY; OBSERVE/REJECT and zero positions are valid. Evidence is written beneath ignored `runtime/reports/`.
 
 ## Operator expectations
 

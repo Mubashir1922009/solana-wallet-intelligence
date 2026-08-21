@@ -322,6 +322,19 @@ export const workerLeases = pgTable("worker_leases", {
   queueDepth: integer("queue_depth").notNull().default(0), revision: text("revision")
 }, (table) => [index("worker_leases_expiry_idx").on(table.leaseExpiresAt)]);
 
+export const schemaRevisions = pgTable("schema_revisions", {
+  component: text("component").primaryKey(), revision: text("revision").notNull(), appliedAt: timestamp("applied_at", { withTimezone: true, mode: "string" }).notNull()
+});
+
+export const runtimeSettings = pgTable("runtime_settings", {
+  key: text("key").primaryKey(), watcherEnabled: boolean("watcher_enabled").notNull().default(true), shadowEntryEnabled: boolean("shadow_entry_enabled").notNull().default(true),
+  killSwitch: boolean("kill_switch").notNull().default(false), updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(), updatedBy: text("updated_by").notNull(), revision: integer("revision").notNull().default(1)
+});
+
+export const operatorLoginBuckets = pgTable("operator_login_buckets", {
+  clientLabelHash: text("client_label_hash").primaryKey(), windowStartedAt: timestamp("window_started_at", { withTimezone: true, mode: "string" }).notNull(), attempts: integer("attempts").notNull(), updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [index("operator_login_buckets_updated_idx").on(table.updatedAt)]);
+
 export const operatorSessions = pgTable("operator_sessions", {
   id: uuid("id").primaryKey(), tokenHash: text("token_hash").notNull(), csrfHash: text("csrf_hash").notNull(), createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }).notNull(), revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),

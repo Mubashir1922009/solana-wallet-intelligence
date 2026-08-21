@@ -15,6 +15,8 @@ const environmentSchema = z.object({
   SOLANA_WS_URL: z.url().refine((value) => value.startsWith("ws://") || value.startsWith("wss://"), "SOLANA_WS_URL must use ws:// or wss://"),
   LIVE_PROVIDER_MODE: z.enum(["STANDARD_WS", "HELIUS_WEBHOOK"]).default("STANDARD_WS"),
   MAX_LIVE_SUBSCRIPTIONS: z.coerce.number().int().min(1).max(1_000).default(100),
+  WS_MAX_SUBSCRIPTIONS_PER_CONNECTION: z.coerce.number().int().min(1).max(500).default(100),
+  WS_MAX_SHARDS: z.coerce.number().int().min(1).max(10).default(4),
   WS_RECONNECT_BASE_MS: z.coerce.number().int().min(100).max(30_000).default(500),
   WS_RECONNECT_CAP_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
   WS_LIVENESS_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(600_000).default(45_000),
@@ -78,6 +80,7 @@ export function parseConfig(environment: Record<string, string | undefined>): Ap
     throw new Error("LIVE execution is disabled: no reviewed live execution provider is installed");
   }
   if (parsed.JUPITER_AUTH_MODE === "API_KEY" && parsed.JUPITER_API_KEY === undefined) throw new Error("JUPITER_AUTH_MODE=API_KEY requires JUPITER_API_KEY");
+  if (parsed.MAX_LIVE_SUBSCRIPTIONS > parsed.WS_MAX_SUBSCRIPTIONS_PER_CONNECTION * parsed.WS_MAX_SHARDS) throw new Error("MAX_LIVE_SUBSCRIPTIONS exceeds configured WebSocket shard capacity");
   if (parsed.NODE_ENV === "production" && (parsed.SESSION_SECRET === undefined || parsed.OPERATOR_PASSWORD_HASH === undefined || parsed.CORS_ALLOWED_ORIGIN === undefined)) throw new Error("Production requires SESSION_SECRET, OPERATOR_PASSWORD_HASH, and CORS_ALLOWED_ORIGIN");
   if (parsed.NODE_ENV === "production" && parsed.EXECUTION_MODE !== "SHADOW") throw new Error("Production remote deployment must explicitly use EXECUTION_MODE=SHADOW");
   return parsed;

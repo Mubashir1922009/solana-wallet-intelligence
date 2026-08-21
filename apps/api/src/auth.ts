@@ -9,16 +9,15 @@ export interface OperatorAuthOptions {
 export interface AuthenticatedSession { session: OperatorSession; csrfValid: boolean }
 
 export class OperatorAuthService {
-  private readonly loginAttempts = new Map<string, number[]>();
   constructor(private readonly store: IntelligenceStore, private readonly options: OperatorAuthOptions) {}
 
   async login(password: string, clientLabel: string | null): Promise<{ sessionToken: string; csrfToken: string; session: OperatorSession } | null> {
-    const key = clientLabel ?? "unknown"; const nowMs = this.now().getTime(); const cutoff = nowMs - this.options.loginWindowMs;
-    const recent = (this.loginAttempts.get(key) ?? []).filter((at) => at > cutoff);
-    if (recent.length >= this.options.loginMaxAttempts) { await this.audit("LOGIN_RATE_LIMITED", null, clientLabel, {}); return null; }
-    if (!await verifyPassword(password, this.options.passwordHash)) { recent.push(nowMs); this.loginAttempts.set(key, recent); await this.audit("LOGIN_FAILED", null, clientLabel, {}); return null; }
-    this.loginAttempts.delete(key);
-    const sessionToken = randomBytes(32).toString("base64url"); const csrfToken = randomBytes(32).toString("base64url"); const now = this.now().toISOString();
+    const nowMs = this.now().getTime(); const key = this.hash(`login:${clientLabel ?? "unknown"}`); const now = new Date(nowMs).toISOString(); const cutoff = new Date(nowMs - this.options.loginWindowMs).toISOString();
+    const attempt = await this.store.consumeOperatorLoginAttempt(key, now, cutoff, this.options.loginMaxAttempts);
+    if (!attempt.allowed) { await this.audit("LOGIN_RATE_LIMITED", null, clientLabel, { attempts: attempt.bucket.attempts }); return null; }
+    if (!await verifyPassword(password, this.options.passwordHash)) { await this.audit("LOGIN_FAILED", null, clientLabel, { attempts: attempt.bucket.attempts }); return null; }
+    await this.store.clearOperatorLoginBucket(key);
+    const sessionToken = randomBytes(32).toString("base64url"); const csrfToken = randomBytes(32).toString("base64url");
     const session: OperatorSession = { id: newId(), tokenHash: this.hash(sessionToken), csrfHash: this.hash(csrfToken), createdAt: now, expiresAt: new Date(nowMs + this.options.sessionTtlMs).toISOString(), revokedAt: null, lastUsedAt: now, clientLabel };
     await this.store.createOperatorSession(session); await this.audit("LOGIN_SUCCEEDED", session.id, clientLabel, {}); return { sessionToken, csrfToken, session };
   }
@@ -30,7 +29,7 @@ export class OperatorAuthService {
     await this.store.touchOperatorSession(session.id, now);
     return { session, csrfValid: csrfToken !== null && safeEqual(this.hash(csrfToken), session.csrfHash) };
   }
-  isRateLimited(clientLabel: string | null): boolean { const cutoff = this.now().getTime() - this.options.loginWindowMs; return (this.loginAttempts.get(clientLabel ?? "unknown") ?? []).filter((at) => at > cutoff).length >= this.options.loginMaxAttempts; }
+  async isRateLimited(clientLabel: string | null): Promise<boolean> { const bucket = await this.store.getOperatorLoginBucket(this.hash(`login:${clientLabel ?? "unknown"}`)); return bucket !== null && bucket.windowStartedAt >= new Date(this.now().getTime() - this.options.loginWindowMs).toISOString() && bucket.attempts >= this.options.loginMaxAttempts; }
 
   async logout(session: OperatorSession): Promise<void> { const now = this.now().toISOString(); await this.store.revokeOperatorSession(session.id, now); await this.audit("LOGOUT", session.id, session.clientLabel, {}); }
   cookie(token: string, maxAgeSeconds?: number): string { const maxAge = maxAgeSeconds ?? Math.floor(this.options.sessionTtlMs / 1_000); return `operator_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${this.options.secureCookies ? "; Secure" : ""}`; }

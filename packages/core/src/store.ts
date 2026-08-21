@@ -15,7 +15,7 @@ import type { WalletBackfillRun } from "./domain.js";
 import type { CopyabilityEvaluation } from "./copyability.js";
 import type { CrowdingObservation } from "./crowding.js";
 import type { MarketObservation } from "./market.js";
-import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletReputationSnapshot, WorkerLease } from "./runtime-domain.js";
+import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletReputationSnapshot, WorkerLease } from "./runtime-domain.js";
 
 export interface IntelligenceStore {
   upsertWallet(publicKey: string, now: string): Promise<Wallet>;
@@ -38,6 +38,7 @@ export interface IntelligenceStore {
   getCopyabilityBySourceTransaction(signature: string): Promise<CopyabilityEvaluation | null>;
   listRecentCopyability(limit: number): Promise<CopyabilityEvaluation[]>;
   insertCrowdingObservation(observation: CrowdingObservation): Promise<"inserted" | "duplicate">;
+  listCrowdingObservations(sourceTransactionSignatures: string[]): Promise<CrowdingObservation[]>;
   insertBackfillRun(run: WalletBackfillRun): Promise<void>;
   insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void>;
   getTokenIntelligenceSnapshot(mint: string): Promise<TokenIntelligenceSnapshot | null>;
@@ -82,6 +83,11 @@ export interface IntelligenceStore {
   heartbeatWorkerLease(lease: WorkerLease): Promise<boolean>;
   releaseWorkerLease(workerId: string, now: string): Promise<void>;
   getWorkerLease(): Promise<WorkerLease | null>;
+  getRuntimeSettings(): Promise<RuntimeSettings>;
+  updateRuntimeSettings(settings: RuntimeSettings): Promise<boolean>;
+  consumeOperatorLoginAttempt(clientLabelHash: string, now: string, windowStartedAt: string, maximumAttempts: number): Promise<{ allowed: boolean; bucket: OperatorLoginBucket }>;
+  getOperatorLoginBucket(clientLabelHash: string): Promise<OperatorLoginBucket | null>;
+  clearOperatorLoginBucket(clientLabelHash: string): Promise<void>;
   createOperatorSession(session: OperatorSession): Promise<void>;
   getOperatorSessionByTokenHash(tokenHash: string): Promise<OperatorSession | null>;
   touchOperatorSession(id: string, at: string): Promise<void>;

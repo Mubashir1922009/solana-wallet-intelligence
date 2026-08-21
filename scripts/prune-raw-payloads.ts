@@ -1,10 +1,10 @@
 import process from "node:process";
-import { createPostgresStore } from "@intelligence/database";
+import { createPostgresStore, rawPayloadRetentionMode } from "@intelligence/database";
 
 async function main(): Promise<void> {
 
 if (process.env.DATABASE_URL === undefined) throw new Error("DATABASE_URL is required; no database was modified");
-const apply = process.argv.includes("--apply");
+const apply = rawPayloadRetentionMode(process.argv) === "APPLIED";
 const configuredDays = Number(process.env.RAW_PAYLOAD_RETENTION_DAYS ?? "14");
 if (!Number.isInteger(configuredDays) || configuredDays < 1 || configuredDays > 365) throw new Error("RAW_PAYLOAD_RETENTION_DAYS must be an integer from 1 to 365");
 const database = createPostgresStore(process.env.DATABASE_URL);

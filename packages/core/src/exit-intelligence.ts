@@ -50,7 +50,7 @@ export function recommendExit(position: PaperPosition, mark: PositionMark | null
   return { id: newId(), positionId: position.id, recommendation, reasonCodes: reasons, confidence, inputSnapshot, createdAt: now, rulesetHash: stableHash(rules as unknown as JsonValue) };
 }
 
-export interface SourceMonitorStore { listPositions(): Promise<PaperPosition[]>; getShadowPositionRecord(positionId: string): Promise<ShadowPositionRecord | null>; appendPositionEvent(event: PositionEvent): Promise<"inserted" | "duplicate"> }
+export interface SourceMonitorStore { listPositions(): Promise<PaperPosition[]>; getShadowPositionRecord(positionId: string): Promise<ShadowPositionRecord | null>; listPositionEvents(positionId: string, limit: number): Promise<PositionEvent[]>; appendPositionEvent(event: PositionEvent): Promise<"inserted" | "duplicate"> }
 export class SourceWalletPositionMonitor {
   constructor(private readonly store: SourceMonitorStore) {}
   async observe(action: WalletAction): Promise<PositionEvent[]> {
@@ -59,9 +59,15 @@ export class SourceWalletPositionMonitor {
     for (const position of positions) {
       const context = await this.store.getShadowPositionRecord(position.id);
       const knownSourceAmount = context?.context.sourceOutputRawAmount ?? null;
-      const fullSell = action.classification === "SWAP_SELL" && action.inputRawAmount !== null && knownSourceAmount !== null && action.inputRawAmount >= knownSourceAmount;
-      const type: PositionEvent["type"] = fullSell ? "source_wallet_full_sell" : action.classification === "SWAP_SELL" ? "source_wallet_partial_sell" : action.classification === "TRANSFER_OUT" ? "source_wallet_transfer_out" : "source_activity_ambiguous";
-      const event = { id: newId(), positionId: position.id, type, createdAt: action.observedAt, details: { transactionSignature: action.transactionSignature, rawAmount: action.inputRawAmount?.toString() ?? null }, idempotencyKey: `source:${position.id}:${action.transactionSignature}:${type}` } satisfies PositionEvent;
+      const history = await this.store.listPositionEvents(position.id, 1_000);
+      const priorReduction = history.reduce((sum, event) => { const details = event.details as { reductionRaw?: string; completeness?: number }; return sum + (details.completeness === 1 && /^\d+$/.test(details.reductionRaw ?? "") ? BigInt(details.reductionRaw ?? "0") : 0n); }, 0n);
+      const current = knownSourceAmount === null ? null : knownSourceAmount > priorReduction ? knownSourceAmount - priorReduction : 0n;
+      const reduction = action.inputRawAmount;
+      const complete = current !== null && reduction !== null && action.classificationConfidence !== "UNKNOWN";
+      const fullSell = action.classification === "SWAP_SELL" && complete && reduction >= current;
+      const type: PositionEvent["type"] = fullSell ? "source_wallet_full_sell" : action.classification === "SWAP_SELL" && complete ? "source_wallet_partial_sell" : action.classification === "TRANSFER_OUT" ? "source_wallet_transfer_out" : "source_activity_ambiguous";
+      const remaining = complete && current !== null && reduction !== null ? current > reduction ? current - reduction : 0n : null;
+      const event = { id: newId(), positionId: position.id, type, createdAt: action.observedAt, details: { transactionSignature: action.transactionSignature, balanceAfterTriggerRaw: knownSourceAmount?.toString() ?? null, balanceBeforeRaw: current?.toString() ?? null, reductionRaw: reduction?.toString() ?? null, reconstructedBalanceRaw: remaining?.toString() ?? null, completeness: complete ? 1 : 0, confidence: complete ? "MEDIUM" : "UNKNOWN", classification: type === "source_wallet_full_sell" ? "FULL_OBSERVED_EXIT" : type === "source_wallet_partial_sell" ? "PARTIAL_SELL" : type === "source_wallet_transfer_out" ? "TRANSFER_OUT" : "UNKNOWN_REDUCTION" }, idempotencyKey: `source:${position.id}:${action.transactionSignature}:${type}` } satisfies PositionEvent;
       if (await this.store.appendPositionEvent(event) === "inserted") events.push(event);
     }
     return events;

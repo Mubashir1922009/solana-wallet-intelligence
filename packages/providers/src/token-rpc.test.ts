@@ -7,13 +7,13 @@ const accountB = "Stake11111111111111111111111111111111111111";
 const owner = "11111111111111111111111111111111";
 const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
-function rpcFetch(token2022 = false): typeof fetch {
+function rpcFetch(token2022 = false, extensions?: Array<{ extension: string }>): typeof fetch {
   return (async (_input, init) => {
     if (typeof init?.body !== "string") throw new Error("Expected JSON body");
     const body = JSON.parse(init.body) as { method: string };
     const result = body.method === "getTokenSupply" ? { context: { slot: 10 }, value: { amount: "1000", decimals: 6 } }
       : body.method === "getTokenLargestAccounts" ? { context: { slot: 11 }, value: [{ address: accountA, amount: "200", decimals: 6 }, { address: accountB, amount: "100", decimals: 6 }] }
-      : body.method === "getAccountInfo" ? { context: { slot: 12 }, value: { owner: token2022 ? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" : tokenProgram, data: { program: "spl-token", parsed: { type: "mint", info: { decimals: 6, isInitialized: true, mintAuthority: null, freezeAuthority: null, supply: "1000" } } } } }
+      : body.method === "getAccountInfo" ? { context: { slot: 12 }, value: { owner: token2022 ? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" : tokenProgram, data: { program: "spl-token", parsed: { type: "mint", info: { decimals: 6, isInitialized: true, mintAuthority: null, freezeAuthority: null, supply: "1000", ...(extensions === undefined ? {} : { extensions }) } } } } }
       : { context: { slot: 13 }, value: [accountA, accountB].map(() => ({ owner: tokenProgram, data: { program: "spl-token", parsed: { type: "account", info: { owner, mint, tokenAmount: { amount: "1", decimals: 6 } } } } })) };
     return new Response(JSON.stringify({ jsonrpc: "2.0", result }), { status: 200 });
   }) as typeof fetch;
@@ -36,6 +36,8 @@ describe("standard token RPC intelligence", () => {
     expect(result).toMatchObject({ tokenProgram: "TOKEN_2022", extensionsStatus: "UNKNOWN_UNSUPPORTED" });
     expect(result.reasons).toContain("TOKEN_2022_EXTENSIONS_UNKNOWN");
   });
+
+  it("records detected Token-2022 extensions and keeps unsupported semantics unknown", async () => { const provider = new StandardSolanaTokenIntelligenceProvider({ rpcUrl: "https://rpc.test", fetchImplementation: rpcFetch(true, [{ extension: "transferFeeConfig" }]) }); expect(await provider.getMint(mint)).toMatchObject({ tokenProgram: "TOKEN_2022", extensions: ["transferFeeConfig"], unsupportedExtensionPresent: true, extensionsStatus: "UNKNOWN_UNSUPPORTED", reasons: ["TOKEN_2022_UNSUPPORTED_EXTENSION_PRESENT"] }); });
 
   it("rejects malformed RPC envelopes", async () => {
     const provider = new StandardSolanaTokenIntelligenceProvider({ rpcUrl: "https://rpc.test", fetchImplementation: async () => new Response("{}", { status: 200 }) });

@@ -65,9 +65,13 @@ export class DurableRuntimeWorker {
     const now = Date.parse(this.now()); let scheduled = 0;
     for (const position of await this.store.listPositions()) {
       if (position.state === "closed") continue;
-      const due = new Date(Math.max(now, Date.parse(position.updatedAt) + intervalMs)).toISOString();
-      const result = await this.store.enqueueRuntimeJob(newRuntimeJob("POSITION_MARK", { positionId: position.id }, due, `position-mark:${position.id}:${due}`, 8));
-      if (result === "inserted") scheduled += 1;
+      const requestedAtMs = Date.parse(position.updatedAt) + intervalMs; const requestedAt = new Date(requestedAtMs).toISOString(); const due = new Date(Math.max(now, requestedAtMs)).toISOString();
+      const jobs: Array<[RuntimeJobType, JsonValue, string]> = [
+        ["POSITION_MARK", { positionId: position.id, requestedAt, recoveryObservedAt: this.now(), latenessMs: Math.max(0, now - requestedAtMs) }, `position-mark:${position.id}:${requestedAt}`],
+        ["TOKEN_RISK_REFRESH", { tokenMint: position.tokenMint, positionId: position.id, requestedAt }, `position-risk:${position.id}:${requestedAt}`],
+        ["EXIT_RECALCULATION", { positionId: position.id, requestedAt }, `position-exit:${position.id}:${requestedAt}`]
+      ];
+      for (const [type, payload, key] of jobs) if (await this.store.enqueueRuntimeJob(newRuntimeJob(type, payload, due, key, 8)) === "inserted") scheduled += 1;
     }
     return scheduled;
   }
