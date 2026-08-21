@@ -3,12 +3,12 @@ import { readFile } from "node:fs/promises";
 import { createPostgresStore, EXPECTED_SCHEMA_REVISION, runMigrations } from "@intelligence/database";
 import { newRuntimeJob } from "@intelligence/core";
 
-const acknowledgement = "I_UNDERSTAND_THIS_USES_A_PROJECT_STAGING_DATABASE";
+const acknowledgement = "wallet-intelligence-shadow";
 async function main(): Promise<void> {
   const preflight = process.argv.includes("--preflight");
-  if (preflight) { const migration = await readFile("packages/database/drizzle/0004_flippant_trish_tilby.sql", "utf8"); if (!migration.includes(EXPECTED_SCHEMA_REVISION)) throw new Error("Local authoritative revision is missing from migration SQL"); console.info(JSON.stringify({ mode: "NO_DATABASE_PREFLIGHT", postgresBehavior: "NOT_RUN", expectedRevision: EXPECTED_SCHEMA_REVISION, harness: "READY", command: "DATABASE_URL=... STAGING_VERIFY_ACK=I_UNDERSTAND_THIS_USES_A_PROJECT_STAGING_DATABASE pnpm staging:verify" }, null, 2)); return; }
+  if (preflight) { const migration = await readFile("packages/database/drizzle/0004_flippant_trish_tilby.sql", "utf8"); if (!migration.includes(EXPECTED_SCHEMA_REVISION)) throw new Error("Local authoritative revision is missing from migration SQL"); console.info(JSON.stringify({ mode: "NO_DATABASE_PREFLIGHT", postgresBehavior: "NOT_RUN", expectedRevision: EXPECTED_SCHEMA_REVISION, harness: "READY", command: "DATABASE_URL=... STAGING_DATABASE_ACK=wallet-intelligence-shadow pnpm staging:verify" }, null, 2)); return; }
   const url = process.env.DATABASE_URL; if (url === undefined) throw new Error("DATABASE_URL is required; use --preflight for the no-database path");
-  if (process.env.STAGING_VERIFY_ACK !== acknowledgement) throw new Error(`Set STAGING_VERIFY_ACK=${acknowledgement} after confirming this is a disposable project staging database`);
+  if (process.env.STAGING_DATABASE_ACK !== acknowledgement) throw new Error(`Set STAGING_DATABASE_ACK=${acknowledgement} after confirming this is a disposable project staging database`);
   const metadata = new URL(url); const databaseName = metadata.pathname.replace(/^\//, ""); if (databaseName.length < 3 || ["postgres", "template0", "template1"].includes(databaseName)) throw new Error("Refusing an unscoped/default PostgreSQL database name");
   const checks: Record<string, string> = {}; const ids: string[] = []; const database = createPostgresStore(url); let prefix = "";
   try {

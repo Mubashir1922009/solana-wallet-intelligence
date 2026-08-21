@@ -12,7 +12,7 @@ Real staging verification in PowerShell:
 
 ```powershell
 $env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:PORT/PROJECT_STAGING_DATABASE"
-$env:STAGING_VERIFY_ACK = "I_UNDERSTAND_THIS_USES_A_PROJECT_STAGING_DATABASE"
+$env:STAGING_DATABASE_ACK = "wallet-intelligence-shadow"
 pnpm staging:verify
 ```
 
@@ -20,7 +20,7 @@ POSIX shell:
 
 ```sh
 DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/PROJECT_STAGING_DATABASE' \
-STAGING_VERIFY_ACK='I_UNDERSTAND_THIS_USES_A_PROJECT_STAGING_DATABASE' \
+STAGING_DATABASE_ACK='wallet-intelligence-shadow' \
 pnpm staging:verify
 ```
 
