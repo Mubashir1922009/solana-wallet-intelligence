@@ -2,15 +2,15 @@ import process from "node:process";
 import { createServer } from "node:http";
 import { z } from "zod";
 import { parseConfig, safeConfigSummary } from "@intelligence/config";
-import { createPostgresStore } from "@intelligence/database";
+import { createAuthoritativeRuntimeDatabase } from "@intelligence/database";
 import { calculateWalletReputation, ContinuousShadowRuntime, DurableRuntimeWorker, evaluateCandidate, evaluateTokenRisk, ForwardReturnResearchService, LiveIngestionCoordinator, newRuntimeJob, ObservedDatasetCandidateDiscoveryEngine, OptionalAIExitAnalyzer, PaperPositionService, PositionMonitor, ShadowRuntimeControl, SourceWalletPositionMonitor, TrackedWalletManager, WalletHistoryBackfillService, recommendExit, type RuntimeJobHandlers } from "@intelligence/core";
 import { ConsoleNotificationProvider, DurableNotificationService, FallbackChainDataProvider, HeliusChainDataProvider, JupiterRecentTokenProvider, JupiterSwapV2MarketDataProvider, OpenRouterAIProvider, ProviderBudgetManager, ShardedSolanaLiveChainProvider, StandardSolanaRpcProvider, StandardSolanaTokenIntelligenceProvider, TelegramNotificationProvider, TelegramShadowController } from "@intelligence/providers";
 
 try { process.loadEnvFile?.(".env"); } catch { /* Process manager may supply the environment. */ }
-const config = parseConfig(process.env); const database = createPostgresStore(config.DATABASE_URL); await database.schemaReady();
+const config = parseConfig(process.env); const database = createAuthoritativeRuntimeDatabase(config.DATABASE_URL); await database.schemaReady();
 const standardRpc = new StandardSolanaRpcProvider({ rpcUrl: config.SOLANA_RPC_URL, historyConcurrency: config.HISTORY_CONCURRENCY });
 const helius = config.HELIUS_API_KEY === undefined ? undefined : new HeliusChainDataProvider({ rpcUrl: config.HELIUS_RPC_URL, apiKey: config.HELIUS_API_KEY });
-const chain = helius === undefined ? standardRpc : new FallbackChainDataProvider(standardRpc, helius, () => undefined);
+const chain = helius === undefined ? standardRpc : new FallbackChainDataProvider(helius, standardRpc, () => undefined);
 const jupiter = new JupiterSwapV2MarketDataProvider({ authMode: config.JUPITER_AUTH_MODE, ...(config.JUPITER_API_KEY === undefined ? {} : { apiKey: config.JUPITER_API_KEY }) });
 const quoteBudget = new ProviderBudgetManager({ provider: "jupiter-swap-v2", concurrency: config.JUPITER_API_KEY === undefined ? 1 : config.PROVIDER_CONCURRENCY, maximumAttempts: 2, baseBackoffMs: config.JUPITER_API_KEY === undefined ? 2_000 : 250, cacheTtlMs: 500 });
 const quotes = { name: jupiter.name, enabled: jupiter.enabled, getQuote: async (request: Parameters<typeof jupiter.getQuote>[0]) => quoteBudget.run(`quote:${request.inputMint}:${request.outputMint}:${request.inputRawAmount}`, async () => jupiter.getQuote(request)) };

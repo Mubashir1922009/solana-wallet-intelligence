@@ -14,6 +14,18 @@ describe("Fastify API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ status: "ok" });
   });
+  it("reports not ready when the authoritative database is unavailable", async () => {
+    app = await buildApp({ store: new InMemoryIntelligenceStore(), executionMode: "PAPER", network: "mainnet-beta", databasePing: async () => { throw new Error("database unavailable"); } });
+    const response = await app.inject({ method: "GET", url: "/readyz" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ status: "not_ready", role: "api" });
+  });
+  it("exposes the active fallback provider and degraded Helius state", async () => {
+    app = await buildApp({ store: new InMemoryIntelligenceStore(), executionMode: "SHADOW", network: "mainnet-beta", chainPing: async () => undefined, chainProviderState: () => ({ primaryProvider: "helius", fallbackProvider: "standard-solana-rpc", activeProvider: "standard-solana-rpc", primaryDegradedUntil: "2026-01-01T00:00:30.000Z", heliusConfigured: true }) });
+    const status = (await app.inject({ method: "GET", url: "/api/system/status" })).json<{ activeChainProvider: string; providerTelemetry: Array<{ provider: string; health: string; detail: string }> }>();
+    expect(status.activeChainProvider).toBe("standard-solana-rpc");
+    expect(status.providerTelemetry).toContainEqual(expect.objectContaining({ provider: "HELIUS", health: "DEGRADED", detail: "active=standard-solana-rpc" }));
+  });
   it("creates and retrieves a tracked wallet", async () => {
     app = await buildApp({ store: new InMemoryIntelligenceStore(), executionMode: "PAPER", network: "mainnet-beta" });
     expect((await app.inject({ method: "POST", url: `/api/wallets/${wallet}/track` })).statusCode).toBe(200);

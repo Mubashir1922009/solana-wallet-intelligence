@@ -22,6 +22,8 @@
     "shadow:soak": "tsx scripts/shadow-soak.ts",
     "shadow:e2e": "tsx scripts/shadow-e2e.ts",
     "resources:check": "tsx scripts/resources-check.ts",
+    "readiness:report": "tsx scripts/readiness-report.ts",
+    "staging:durability": "tsx scripts/staging-verify.ts",
     "staging:verify": "tsx scripts/staging-verify.ts",
     "secrets:generate": "tsx scripts/generate-secrets.ts",
     "maintenance:prune-raw": "tsx scripts/prune-raw-payloads.ts",
