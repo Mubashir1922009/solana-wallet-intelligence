@@ -1,0 +1,9 @@
+{
+  "name": "@intelligence/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "tsx watch src/main.ts", "start": "node dist/main.js", "build": "tsx build.ts" },
+  "dependencies": { "@intelligence/config": "workspace:*", "@intelligence/core": "workspace:*", "@intelligence/database": "workspace:*", "@intelligence/providers": "workspace:*", "pino": "9.9.0", "zod": "4.1.5" },
+  "devDependencies": { "tsup": "8.5.0" }
+}

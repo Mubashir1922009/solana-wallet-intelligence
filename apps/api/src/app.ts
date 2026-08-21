@@ -2,10 +2,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
-import { PaperPositionService, TransactionIngestionService, WalletHistoryBackfillService, type ExecutionMode, type IntelligenceStore, type ProviderBudgetSnapshot, type ProviderTransactionEnvelope, type SystemComponentHealth, type TrackedWalletManager } from "@intelligence/core";
+import { newRuntimeJob, PaperPositionService, TransactionIngestionService, workerHealth, type ExecutionMode, type IntelligenceStore, type OperatorSession, type ProviderBudgetSnapshot, type ProviderTransactionEnvelope, type SystemComponentHealth, type TrackedWalletManager } from "@intelligence/core";
 import type { LiveConnectionSnapshot } from "@intelligence/providers";
 import { JupiterMarketError, parseHeliusWebhookPayload, type ChainDataProvider, type QuoteMarketDataProvider } from "@intelligence/providers";
 import { RuntimeCounters } from "./metrics.js";
+import { cookieValue, OperatorAuthService } from "./auth.js";
+import type { TelegramShadowController } from "@intelligence/providers";
 
 const publicKeySchema = z.string().min(32).max(44).regex(/^[1-9A-HJ-NP-Za-km-z]+$/, "must be a base58 Solana public key");
 const idSchema = z.uuid();
@@ -38,6 +40,11 @@ export interface AppDependencies {
     restoreShadow(): void;
   };
   onWebhookEnvelope?: (envelope: ProviderTransactionEnvelope) => Promise<void>;
+  auth?: OperatorAuthService;
+  corsAllowedOrigin?: string;
+  schemaReady?: () => Promise<void>;
+  telegram?: TelegramShadowController;
+  production?: boolean;
 }
 
 function safeJson(value: unknown): unknown {
@@ -64,10 +71,24 @@ async function check(component: SystemComponentHealth["component"], operation: (
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({ logger: dependencies.logger ?? false, bodyLimit: 1_048_576 });
-  await app.register(cors, { origin: ["http://127.0.0.1:3000", "http://localhost:3000"] });
+  const allowedOrigins = new Set(["http://127.0.0.1:3000", "http://localhost:3000", ...(dependencies.corsAllowedOrigin === undefined ? [] : [dependencies.corsAllowedOrigin])]);
+  await app.register(cors, { origin: (origin, callback) => callback(null, origin === undefined || allowedOrigins.has(origin)), credentials: true });
   const counters = dependencies.counters ?? new RuntimeCounters();
   const ingestion = new TransactionIngestionService(dependencies.store);
   const positions = new PaperPositionService(dependencies.store);
+  const sessions = new WeakMap<object, OperatorSession>();
+
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-content-type-options", "nosniff").header("referrer-policy", "no-referrer").header("x-frame-options", "DENY").header("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    if (dependencies.production === true || process.env.NODE_ENV === "production") reply.header("strict-transport-security", "max-age=31536000; includeSubDomains");
+    const publicPath = request.url === "/health" || request.url === "/livez" || request.url === "/readyz" || request.url.startsWith("/api/auth/login") || request.url.startsWith("/api/webhooks/");
+    if (dependencies.auth === undefined || publicPath) return;
+    const auth = await dependencies.auth.authenticate(cookieValue(request.headers.cookie, "operator_session"), typeof request.headers["x-csrf-token"] === "string" ? request.headers["x-csrf-token"] : null);
+    if (auth === null) { await dependencies.auth.audit("SESSION_REJECTED", null, request.ip, { path: request.url }); return reply.code(401).send({ error: "unauthorized" }); }
+    sessions.set(request, auth.session);
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !auth.csrfValid) { await dependencies.auth.audit("CSRF_REJECTED", auth.session.id, request.ip, { path: request.url }); return reply.code(403).send({ error: "csrf_rejected" }); }
+  });
+  app.addHook("onResponse", async (request, reply) => { const session = sessions.get(request); if (dependencies.auth !== undefined && session !== undefined && !["GET", "HEAD", "OPTIONS"].includes(request.method) && reply.statusCode < 400) await dependencies.auth.audit("OPERATOR_ACTION", session.id, request.ip, { method: request.method, path: request.url, statusCode: reply.statusCode }); });
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ error: "validation_error", issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })) });
@@ -77,6 +98,17 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
 
   app.get("/health", () => ({ status: "ok", service: "wallet-intelligence-api", timestamp: new Date().toISOString() }));
+  app.get("/livez", () => ({ status: "alive", role: "api", timestamp: new Date().toISOString() }));
+  app.get("/readyz", async (_request, reply) => { try { await dependencies.databasePing?.(); await dependencies.schemaReady?.(); return { status: "ready", role: "api" }; } catch { return reply.code(503).send({ status: "not_ready", role: "api" }); } });
+
+  app.post("/api/auth/login", async (request, reply) => {
+    if (dependencies.auth === undefined) return reply.code(503).send({ error: "authentication_not_configured" });
+    const { password } = z.object({ password: z.string().min(1).max(1_024) }).parse(request.body); const result = await dependencies.auth.login(password, request.ip);
+    if (result === null) return reply.code(dependencies.auth.isRateLimited(request.ip) ? 429 : 401).send({ error: dependencies.auth.isRateLimited(request.ip) ? "login_rate_limited" : "invalid_credentials" });
+    reply.header("set-cookie", dependencies.auth.cookie(result.sessionToken)); return { authenticated: true, csrfToken: result.csrfToken, expiresAt: result.session.expiresAt };
+  });
+  app.get("/api/auth/session", async (request) => { const session = sessions.get(request); return { authenticated: session !== undefined, expiresAt: session?.expiresAt ?? null, activeSessions: await dependencies.store.countActiveOperatorSessions(new Date().toISOString()) }; });
+  app.post("/api/auth/logout", async (request, reply) => { const session = sessions.get(request); if (session !== undefined && dependencies.auth !== undefined) await dependencies.auth.logout(session); reply.header("set-cookie", dependencies.auth?.clearCookie() ?? "operator_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict"); return { authenticated: false }; });
 
   app.get("/api/system/status", async () => {
     const components = await Promise.all([
@@ -85,7 +117,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       Promise.resolve<SystemComponentHealth>({ component: "webhook", status: dependencies.webhookAuth === undefined ? "degraded" : "healthy", checkedAt: new Date().toISOString(), detail: dependencies.webhookAuth === undefined ? "authentication not configured" : "authentication configured", latencyMs: null })
     ]);
     const live = dependencies.liveStatus?.() ?? null;
-    return { executionMode: dependencies.executionMode, network: dependencies.network, killSwitchActive: dependencies.runtimeControl?.shadowKilled() ?? false, watcherPaused: dependencies.runtimeControl?.watcherPaused() ?? false, lastProcessedSlot: live?.lastObservedSlot ?? null, queueLagMs: null, counters: counters.snapshot(), live, providerBudgets: dependencies.providerBudgets?.() ?? [], components };
+    const worker = await dependencies.store.getWorkerLease();
+    return { executionMode: dependencies.executionMode, network: dependencies.network, killSwitchActive: dependencies.runtimeControl?.shadowKilled() ?? false, watcherPaused: dependencies.runtimeControl?.watcherPaused() ?? false, lastProcessedSlot: live?.lastObservedSlot ?? worker?.lastProcessedSlot ?? null, queueLagMs: null, counters: counters.snapshot(), live, worker: { health: workerHealth(worker), lease: worker }, providerBudgets: dependencies.providerBudgets?.() ?? [], components };
   });
 
   app.get("/api/live/status", async () => safeJson({ connection: dependencies.liveStatus?.() ?? null, subscriptions: await dependencies.store.listLiveSubscriptionStates(), providerBudgets: dependencies.providerBudgets?.() ?? [] }));
@@ -119,13 +152,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const { publicKey } = z.object({ publicKey: publicKeySchema }).parse(request.params);
     const requestOptions = request.body !== undefined && request.body !== null ? request.body : request.query;
     const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(dependencies.historyMaximumTransactions ?? 100).default(Math.min(50, dependencies.historyMaximumTransactions ?? 100)) }).parse(requestOptions);
-    if (dependencies.chainProvider === undefined) return reply.code(503).send({ error: "history_provider_unavailable" });
-    try {
-      const service = new WalletHistoryBackfillService(dependencies.store, dependencies.chainProvider);
-      return safeJson(await service.backfill(publicKey, limit, { maximumTransactions: dependencies.historyMaximumTransactions ?? 100, concurrency: dependencies.historyConcurrency ?? 4 }));
-    } catch {
-      return reply.code(502).send({ error: "history_provider_error" });
-    }
+    const result = await dependencies.store.enqueueRuntimeJob(newRuntimeJob("WALLET_BACKFILL", { wallet: publicKey, limit }, new Date().toISOString(), `wallet-backfill:${publicKey}:${limit}`, 8));
+    return reply.code(202).send({ accepted: true, duplicate: result === "duplicate" });
   });
 
   app.get("/api/transactions/:signature", async (request, reply) => {
@@ -185,7 +213,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
   app.post("/api/positions/:id/recalculate", async (request) => {
     const { id } = z.object({ id: idSchema }).parse(request.params);
-    return safeJson(await positions.recalculate(id));
+    const requestedAt = new Date().toISOString();
+    const position = await positions.recalculate(id);
+    await dependencies.store.enqueueRuntimeJob(newRuntimeJob("EXIT_RECALCULATION", { positionId: id }, requestedAt, `dashboard-exit-recalculation:${id}:${requestedAt}`, 5));
+    return safeJson(position);
   });
   app.post("/api/positions/:id/manual-control", async (request) => {
     const { id } = z.object({ id: idSchema }).parse(request.params);
@@ -222,11 +253,15 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const { publicKey } = z.object({ publicKey: publicKeySchema }).parse(request.params);
     return safeJson({ discoveries: await dependencies.store.listCandidateDiscoveries(publicKey), forwardReturns: await dependencies.store.listForwardReturnObservations(publicKey) });
   });
+  app.get("/api/research", async (request) => { const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(request.query); return safeJson({ runs: await dependencies.store.listResearchRuns(limit), candidates: await dependencies.store.listCandidateEvaluations(limit), tokens: await dependencies.store.listTokenDiscoveries(limit) }); });
+  app.get("/api/security", async () => safeJson({ activeSessions: await dependencies.store.countActiveOperatorSessions(new Date().toISOString()), events: await dependencies.store.listOperatorSecurityEvents(25) }));
+  app.get("/api/export/research", async (request) => { const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(1_000).default(250) }).parse(request.query); const [signals, copyability, positionsList, candidates, wallets] = await Promise.all([dependencies.store.listSignals(), dependencies.store.listRecentCopyability(limit), dependencies.store.listPositions(), dependencies.store.listCandidateEvaluations(limit), dependencies.store.listWallets()]); const selectedWallets = wallets.slice(0, Math.min(limit, 100)); const [walletReputation, forwardOutcomes] = await Promise.all([Promise.all(selectedWallets.map((wallet) => dependencies.store.getWalletReputation(wallet.publicKey))), Promise.all(selectedWallets.map((wallet) => dependencies.store.listForwardReturnObservations(wallet.publicKey)))]); return safeJson({ generatedAt: new Date().toISOString(), posture: "SHADOW / QUOTE-BASED - NOT REAL EXECUTION RESULTS", signals: signals.slice(0, limit), copyability, positions: positionsList.slice(0, limit), candidateEvaluations: candidates, walletReputation: walletReputation.filter((item) => item !== null), forwardOutcomes: forwardOutcomes.flat().slice(0, limit) }); });
 
-  app.post("/api/runtime/watcher/pause", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.pauseWatcher(); return { watcherPaused: true }; });
-  app.post("/api/runtime/watcher/resume", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.resumeWatcher(); return { watcherPaused: false }; });
-  app.post("/api/runtime/shadow/kill", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.killShadow(); return { killSwitchActive: true }; });
-  app.post("/api/runtime/shadow/restore", (_request, reply) => { if (dependencies.runtimeControl === undefined) return reply.code(503).send({ error: "runtime_unavailable" }); dependencies.runtimeControl.restoreShadow(); return { killSwitchActive: false }; });
+  const runtimeAction = async (action: string): Promise<void> => { await dependencies.store.enqueueRuntimeJob(newRuntimeJob("RUNTIME_CONTROL", { action }, new Date().toISOString(), `runtime-control:${action}:${Date.now()}`, 3)); };
+  app.post("/api/runtime/watcher/pause", async () => { dependencies.runtimeControl?.pauseWatcher(); await runtimeAction("WATCHER_PAUSE"); return { watcherPaused: true }; });
+  app.post("/api/runtime/watcher/resume", async () => { dependencies.runtimeControl?.resumeWatcher(); await runtimeAction("WATCHER_RESUME"); return { watcherPaused: false }; });
+  app.post("/api/runtime/shadow/kill", async () => { dependencies.runtimeControl?.killShadow(); await runtimeAction("SHADOW_KILL"); return { killSwitchActive: true }; });
+  app.post("/api/runtime/shadow/restore", async () => { dependencies.runtimeControl?.restoreShadow(); await runtimeAction("SHADOW_RESTORE"); return { killSwitchActive: false }; });
 
   app.get("/api/stream", async (request, reply) => {
     reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
@@ -256,6 +291,12 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (dependencies.onWebhookEnvelope !== undefined) await Promise.all(envelopes.map((envelope) => dependencies.onWebhookEnvelope?.(envelope)));
     for (const result of results) counters.increment(result.outcome === "duplicate" ? "duplicates_ignored" : "events_processed");
     return reply.code(202).send({ accepted: results.filter((result) => result.outcome === "accepted").length, duplicates: results.filter((result) => result.outcome === "duplicate").length });
+  });
+  app.post("/api/webhooks/telegram", async (request, reply) => {
+    if (dependencies.telegram === undefined) return reply.code(503).send({ error: "telegram_not_configured" });
+    const secret = typeof request.headers["x-telegram-bot-api-secret-token"] === "string" ? request.headers["x-telegram-bot-api-secret-token"] : undefined;
+    if (!dependencies.telegram.validWebhookSecret(secret)) return reply.code(401).send({ error: "unauthorized" });
+    const result = await dependencies.telegram.handle(request.body); return reply.code(result.accepted ? 200 : 202).send(result);
   });
 
   return app;

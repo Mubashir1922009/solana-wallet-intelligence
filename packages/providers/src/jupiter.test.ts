@@ -25,10 +25,10 @@ describe("Jupiter Swap V2 market observations", () => {
     expect(result.observation.routeAvailable).toBe(false);
   });
 
-  it("rejects transaction-bearing responses and disables cleanly without a key", async () => {
+  it("rejects transaction-bearing responses and supports explicit disablement", async () => {
     const unsafe = new JupiterSwapV2MarketDataProvider({ apiKey: "test-key", fetchImplementation: async () => new Response(JSON.stringify({ inputMint, outputMint, inAmount: "1", outAmount: "2", transaction: "unsigned-payload" }), { status: 200 }) });
     await expect(unsafe.getQuote({ inputMint, outputMint, inputRawAmount: 1n })).rejects.toMatchObject({ code: "MALFORMED_RESPONSE" } satisfies Partial<JupiterMarketError>);
-    const disabled = new JupiterSwapV2MarketDataProvider({});
-    await expect(disabled.getQuote({ inputMint, outputMint, inputRawAmount: 1n })).rejects.toMatchObject({ code: "DISABLED_NO_API_KEY" } satisfies Partial<JupiterMarketError>);
+    const disabled = new JupiterSwapV2MarketDataProvider({ authMode: "DISABLED" });
+    await expect(disabled.getQuote({ inputMint, outputMint, inputRawAmount: 1n })).rejects.toMatchObject({ code: "DISABLED" } satisfies Partial<JupiterMarketError>);
   });
 });

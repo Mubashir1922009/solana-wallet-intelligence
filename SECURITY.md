@@ -10,6 +10,10 @@
 - The dashboard receives only its public API base URL.
 - No private key, seed phrase, signing code, dynamic code loading, or `eval` exists.
 - `LIVE` fails configuration validation and never falls back to paper execution.
+- Operator passwords use versioned scrypt hashes. Random session and CSRF tokens are HMAC-hashed at rest; the session token is only in an HttpOnly, Strict, production-Secure cookie.
+- Login failures, session rejection, CSRF rejection, logout, dashboard actions, and Telegram actions are durably audited without credential values.
+- Strategy APIs and SSE require the single-operator session. State changes additionally require the session-bound CSRF header.
+- Telegram webhooks require the official secret header plus configured chat and user identity; callback nonces expire and are single-use.
 
 ## Future live key management
 
@@ -19,4 +23,4 @@ The current `ExecutionProvider` boundary is not an authorization to add a hot ke
 
 ## Deployment follow-up
 
-Production deployment still needs authenticated operator access, TLS termination, origin policy, webhook secret rotation, network controls for PostgreSQL/Redis, request rate limiting, dependency scanning, backups, and an incident-response runbook. These are explicit deployment requirements, not features silently approximated in this foundation.
+Production still requires TLS termination, database backup/restore drills, private networking, secret rotation, monitoring, and an incident-response runbook. Application authentication, origin policy, headers, login limiting, and webhook validation do not replace infrastructure controls.

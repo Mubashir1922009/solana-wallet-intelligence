@@ -1,9 +1,9 @@
-import { desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import type { AIAnalysis, CandidateDiscovery, ChainTransaction, CopyabilityEvaluation, CrowdingObservation, ExitRecommendation, ForwardReturnObservation, IntelligenceStore, LiveSubscriptionState, MarketObservation, NotificationRecord, PaperPosition, PositionEvent, PositionMark, ShadowPositionContext, ShadowPositionRecord, Signal, TokenConcentrationObservation, TokenIntelligenceSnapshot, TokenMintObservation, TokenRiskEvaluation, TradeDecision, UserAction, Wallet, WalletAction, WalletBackfillRun, WalletMetrics, WalletReputationSnapshot, WalletStatus } from "@intelligence/core";
+import type { AIAnalysis, CandidateDiscovery, CandidateEvaluation, ChainTransaction, CopyabilityEvaluation, CrowdingObservation, ExitRecommendation, ForwardReturnObservation, IntelligenceStore, LiveSubscriptionState, MarketObservation, NotificationRecord, OperatorSecurityEvent, OperatorSession, PaperPosition, PositionEvent, PositionMark, ResearchRun, RuntimeJob, ShadowPositionContext, ShadowPositionRecord, Signal, TelegramInteraction, TokenConcentrationObservation, TokenDiscovery, TokenIntelligenceSnapshot, TokenMintObservation, TokenRiskEvaluation, TradeDecision, UserAction, Wallet, WalletAction, WalletBackfillRun, WalletMetrics, WalletReputationSnapshot, WalletStatus, WorkerLease } from "@intelligence/core";
 import { newId } from "@intelligence/shared";
-import { aiAnalyses, candidateDiscoveries, chainTransactions, copyabilityEvaluations, crowdingObservations, exitRecommendations, forwardReturnObservations, liveSubscriptionState, marketObservations, notifications, paperPositions, positionEvents, positionMarks, shadowPositionRecords, signals, tokenIntelligenceSnapshots, tokenLargestAccounts, tokenRiskEvaluations, tradeDecisions, transactionWallets, userActions, walletActions, walletBackfillRuns, walletMetrics, walletReputationSnapshots, wallets } from "./schema.js";
+import { aiAnalyses, candidateDiscoveries, candidateEvaluations, chainTransactions, copyabilityEvaluations, crowdingObservations, exitRecommendations, forwardReturnObservations, liveSubscriptionState, marketObservations, notifications, operatorSecurityEvents, operatorSessions, paperPositions, positionEvents, positionMarks, researchRuns, runtimeJobs, shadowPositionRecords, signals, telegramInteractions, tokenDiscoveries, tokenIntelligenceSnapshots, tokenLargestAccounts, tokenRiskEvaluations, tradeDecisions, transactionWallets, userActions, walletActions, walletBackfillRuns, walletMetrics, walletReputationSnapshots, wallets, workerLeases } from "./schema.js";
 
 type Database = ReturnType<typeof drizzle>;
 
@@ -164,7 +164,7 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
     const [row] = await this.db.select().from(shadowPositionRecords).where(eq(shadowPositionRecords.positionId, positionId)).limit(1);
     return row === undefined ? null : { ...row, context: reviveShadowContext(row.context) };
   }
-  async insertPositionMark(mark: PositionMark): Promise<void> { await this.db.insert(positionMarks).values(mark); }
+  async insertPositionMark(mark: PositionMark): Promise<"inserted" | "duplicate"> { const rows = await this.db.insert(positionMarks).values(mark).onConflictDoNothing({ target: positionMarks.id }).returning({ id: positionMarks.id }); return rows.length === 0 ? "duplicate" : "inserted"; }
   async listPositionMarks(positionId: string, limit: number): Promise<PositionMark[]> {
     const rows = await this.db.select().from(positionMarks).where(eq(positionMarks.positionId, positionId)).orderBy(desc(positionMarks.observedAt)).limit(limit);
     return rows.map((row) => ({ ...row, confidence: row.confidence as PositionMark["confidence"], provenance: row.provenance as PositionMark["provenance"] }));
@@ -183,12 +183,14 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
     return rows.length === 0 ? "duplicate" : "inserted";
   }
   async updateNotification(record: NotificationRecord): Promise<void> {
-    await this.db.update(notifications).set({ type: record.category, payload: record.payload, provider: record.provider, status: record.status, errorCode: record.errorCode, attemptedAt: record.attemptedAt, deliveredAt: record.deliveredAt }).where(eq(notifications.id, record.id));
+    await this.db.update(notifications).set({ type: record.category, payload: record.payload, provider: record.provider, status: record.status, errorCode: record.errorCode, attemptedAt: record.attemptedAt, deliveredAt: record.deliveredAt, attemptCount: record.attemptCount, nextAttemptAt: record.nextAttemptAt, responseClass: record.responseClass }).where(eq(notifications.id, record.id));
   }
+  async getNotification(id: string): Promise<NotificationRecord | null> { const [row] = await this.db.select().from(notifications).where(eq(notifications.id, id)).limit(1); return row === undefined ? null : this.mapNotification(row); }
   async listNotifications(limit: number): Promise<NotificationRecord[]> {
     const rows = await this.db.select().from(notifications).orderBy(desc(notifications.createdAt)).limit(limit);
-    return rows.map((row) => ({ id: row.id, category: row.type as NotificationRecord["category"], payload: row.payload, provider: row.provider, status: row.status as NotificationRecord["status"], errorCode: row.errorCode, createdAt: row.createdAt, attemptedAt: row.attemptedAt, deliveredAt: row.deliveredAt, idempotencyKey: row.idempotencyKey ?? row.id }));
+    return rows.map((row) => this.mapNotification(row));
   }
+  private mapNotification(row: typeof notifications.$inferSelect): NotificationRecord { return { id: row.id, category: row.type as NotificationRecord["category"], payload: row.payload, provider: row.provider, status: row.status as NotificationRecord["status"], errorCode: row.errorCode, createdAt: row.createdAt, attemptedAt: row.attemptedAt, deliveredAt: row.deliveredAt, idempotencyKey: row.idempotencyKey ?? row.id, attemptCount: row.attemptCount, nextAttemptAt: row.nextAttemptAt, responseClass: row.responseClass as "SUCCESS" | "TRANSIENT" | "PERMANENT" | "DISABLED" | null }; }
   async insertCandidateDiscovery(discovery: CandidateDiscovery): Promise<"inserted" | "duplicate"> {
     const rows = await this.db.insert(candidateDiscoveries).values(discovery).onConflictDoNothing({ target: candidateDiscoveries.idempotencyKey }).returning({ id: candidateDiscoveries.id });
     return rows.length === 0 ? "duplicate" : "inserted";
@@ -208,6 +210,7 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
   async upsertWalletReputation(snapshot: WalletReputationSnapshot): Promise<void> {
     await this.db.insert(walletReputationSnapshots).values({ id: snapshot.id, wallet: snapshot.wallet, snapshot, calculatedAt: snapshot.calculatedAt }).onConflictDoUpdate({ target: walletReputationSnapshots.wallet, set: { id: snapshot.id, snapshot, calculatedAt: snapshot.calculatedAt } });
   }
+  async getWalletReputation(wallet: string): Promise<WalletReputationSnapshot | null> { const [row] = await this.db.select().from(walletReputationSnapshots).where(eq(walletReputationSnapshots.wallet, wallet)).limit(1); return row?.snapshot ?? null; }
   async insertDecision(decision: TradeDecision): Promise<void> { await this.db.insert(tradeDecisions).values(decision); }
   async createPosition(position: PaperPosition): Promise<"inserted" | "duplicate"> {
     const entryMarketSnapshot = { ...position.entryMarketSnapshot, expectedOutputRaw: position.entryMarketSnapshot.expectedOutputRaw?.toString() ?? null } as unknown as PaperPosition["entryMarketSnapshot"];
@@ -231,15 +234,76 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
     const rows = await this.db.select().from(positionEvents).orderBy(desc(positionEvents.createdAt)).limit(limit);
     return rows.map((row) => ({ ...row, type: row.type as PositionEvent["type"] }));
   }
+  async enqueueRuntimeJob(job: RuntimeJob): Promise<"inserted" | "duplicate"> { const rows = await this.db.insert(runtimeJobs).values(job).onConflictDoNothing({ target: runtimeJobs.idempotencyKey }).returning({ id: runtimeJobs.id }); return rows.length === 0 ? "duplicate" : "inserted"; }
+  async claimRuntimeJobs(workerId: string, now: string, leaseExpiresAt: string, limit: number): Promise<RuntimeJob[]> {
+    return await this.db.transaction(async (tx) => {
+      const eligible = await tx.select().from(runtimeJobs).where(and(lt(runtimeJobs.attempts, runtimeJobs.maxAttempts), or(and(eq(runtimeJobs.status, "PENDING"), lte(runtimeJobs.runAt, now)), and(eq(runtimeJobs.status, "RUNNING"), lte(runtimeJobs.leaseExpiresAt, now))))).orderBy(runtimeJobs.runAt).limit(limit).for("update", { skipLocked: true });
+      if (eligible.length === 0) return [];
+      const rows = await tx.update(runtimeJobs).set({ status: "RUNNING", leaseOwner: workerId, leaseExpiresAt, startedAt: now, attempts: sql`${runtimeJobs.attempts} + 1` }).where(inArray(runtimeJobs.id, eligible.map((job) => job.id))).returning();
+      return rows.map((row) => this.mapRuntimeJob(row));
+    });
+  }
+  async completeRuntimeJob(id: string, workerId: string, completedAt: string): Promise<boolean> { const rows = await this.db.update(runtimeJobs).set({ status: "COMPLETED", completedAt, leaseOwner: null, leaseExpiresAt: null }).where(and(eq(runtimeJobs.id, id), eq(runtimeJobs.status, "RUNNING"), eq(runtimeJobs.leaseOwner, workerId))).returning({ id: runtimeJobs.id }); return rows.length > 0; }
+  async failRuntimeJob(id: string, workerId: string, now: string, retryAt: string, errorCode: string): Promise<RuntimeJob | null> {
+    return await this.db.transaction(async (tx) => { const [job] = await tx.select().from(runtimeJobs).where(and(eq(runtimeJobs.id, id), eq(runtimeJobs.status, "RUNNING"), eq(runtimeJobs.leaseOwner, workerId))).limit(1).for("update"); if (job === undefined) return null; const terminal = job.attempts >= job.maxAttempts; const [row] = await tx.update(runtimeJobs).set({ status: terminal ? "FAILED" : "PENDING", runAt: terminal ? job.runAt : retryAt, completedAt: terminal ? now : null, leaseOwner: null, leaseExpiresAt: null, lastError: errorCode }).where(eq(runtimeJobs.id, id)).returning(); return row === undefined ? null : this.mapRuntimeJob(row); });
+  }
+  async listRuntimeJobs(limit: number): Promise<RuntimeJob[]> { return (await this.db.select().from(runtimeJobs).orderBy(desc(runtimeJobs.createdAt)).limit(limit)).map((row) => this.mapRuntimeJob(row)); }
+  async countPendingRuntimeJobs(now: string): Promise<number> { const [row] = await this.db.select({ value: count() }).from(runtimeJobs).where(or(and(eq(runtimeJobs.status, "PENDING"), lte(runtimeJobs.runAt, now)), and(eq(runtimeJobs.status, "RUNNING"), lte(runtimeJobs.leaseExpiresAt, now)))); return row?.value ?? 0; }
+  private mapRuntimeJob(row: typeof runtimeJobs.$inferSelect): RuntimeJob { return { ...row, type: row.type as RuntimeJob["type"], status: row.status as RuntimeJob["status"] }; }
+  async acquireWorkerLease(lease: WorkerLease, now: string): Promise<boolean> { return await this.db.transaction(async (tx) => { await tx.insert(workerLeases).values(lease).onConflictDoNothing({ target: workerLeases.role }); const [current] = await tx.select().from(workerLeases).where(eq(workerLeases.role, lease.role)).limit(1).for("update"); if (current === undefined || (current.workerId !== lease.workerId && current.leaseExpiresAt > now)) return false; await tx.update(workerLeases).set(lease).where(eq(workerLeases.role, lease.role)); return true; }); }
+  async heartbeatWorkerLease(lease: WorkerLease): Promise<boolean> { const rows = await this.db.update(workerLeases).set(lease).where(and(eq(workerLeases.role, lease.role), eq(workerLeases.workerId, lease.workerId))).returning({ role: workerLeases.role }); return rows.length > 0; }
+  async releaseWorkerLease(workerId: string, now: string): Promise<void> { await this.db.update(workerLeases).set({ status: "STOPPING", heartbeatAt: now, leaseExpiresAt: now }).where(eq(workerLeases.workerId, workerId)); }
+  async getWorkerLease(): Promise<WorkerLease | null> { const [row] = await this.db.select().from(workerLeases).where(eq(workerLeases.role, "SHADOW_RUNTIME")).limit(1); return row === undefined ? null : { ...row, role: "SHADOW_RUNTIME", status: row.status as WorkerLease["status"] }; }
+  async createOperatorSession(session: OperatorSession): Promise<void> { await this.db.insert(operatorSessions).values(session); }
+  async getOperatorSessionByTokenHash(tokenHash: string): Promise<OperatorSession | null> { const [row] = await this.db.select().from(operatorSessions).where(eq(operatorSessions.tokenHash, tokenHash)).limit(1); return row ?? null; }
+  async touchOperatorSession(id: string, at: string): Promise<void> { await this.db.update(operatorSessions).set({ lastUsedAt: at }).where(eq(operatorSessions.id, id)); }
+  async revokeOperatorSession(id: string, at: string): Promise<void> { await this.db.update(operatorSessions).set({ revokedAt: at }).where(eq(operatorSessions.id, id)); }
+  async countActiveOperatorSessions(now: string): Promise<number> { const [row] = await this.db.select({ value: count() }).from(operatorSessions).where(and(isNull(operatorSessions.revokedAt), gt(operatorSessions.expiresAt, now))); return row?.value ?? 0; }
+  async insertOperatorSecurityEvent(event: OperatorSecurityEvent): Promise<void> { await this.db.insert(operatorSecurityEvents).values(event); }
+  async listOperatorSecurityEvents(limit: number): Promise<OperatorSecurityEvent[]> { const rows = await this.db.select().from(operatorSecurityEvents).orderBy(desc(operatorSecurityEvents.occurredAt)).limit(limit); return rows.map((row) => ({ ...row, type: row.type as OperatorSecurityEvent["type"], actor: row.actor as OperatorSecurityEvent["actor"] })); }
+  async createTelegramInteraction(interaction: TelegramInteraction): Promise<"inserted" | "duplicate"> { const rows = await this.db.insert(telegramInteractions).values(interaction).onConflictDoNothing({ target: telegramInteractions.nonceHash }).returning({ nonceHash: telegramInteractions.nonceHash }); return rows.length === 0 ? "duplicate" : "inserted"; }
+  async consumeTelegramInteraction(nonceHash: string, updateId: string, now: string): Promise<TelegramInteraction | null> { return await this.db.transaction(async (tx) => { const [row] = await tx.select().from(telegramInteractions).where(eq(telegramInteractions.nonceHash, nonceHash)).limit(1).for("update"); if (row === undefined || row.consumedAt !== null || row.expiresAt <= now) return null; const [updated] = await tx.update(telegramInteractions).set({ consumedAt: now, updateId }).where(and(eq(telegramInteractions.nonceHash, nonceHash), isNull(telegramInteractions.consumedAt))).returning(); return updated === undefined ? null : { ...updated, action: updated.action as TelegramInteraction["action"] }; }); }
+  async upsertTokenDiscovery(discovery: TokenDiscovery): Promise<"inserted" | "updated"> {
+    const rows = await this.db.insert(tokenDiscoveries).values(discovery).onConflictDoNothing({ target: tokenDiscoveries.mint }).returning({ mint: tokenDiscoveries.mint });
+    if (rows.length > 0) return "inserted";
+    await this.db.update(tokenDiscoveries).set({
+      firstPoolCreatedAt: discovery.firstPoolCreatedAt,
+      symbol: discovery.symbol,
+      name: discovery.name,
+      decimals: discovery.decimals,
+      organicScore: discovery.organicScore,
+      organicScoreLabel: discovery.organicScoreLabel,
+      provider: discovery.provider,
+      provenance: discovery.provenance,
+      lastObservedAt: discovery.lastObservedAt,
+      providerObservedAt: discovery.providerObservedAt,
+    }).where(eq(tokenDiscoveries.mint, discovery.mint));
+    return "updated";
+  }
+  async listTokenDiscoveries(limit: number): Promise<TokenDiscovery[]> { return (await this.db.select().from(tokenDiscoveries).orderBy(desc(tokenDiscoveries.lastObservedAt)).limit(limit)).map((row) => ({ ...row, provider: "JUPITER_TOKENS_V2", provenance: "EXTERNAL_HEURISTIC" })); }
+  async upsertCandidateEvaluation(evaluation: CandidateEvaluation): Promise<void> { await this.db.insert(candidateEvaluations).values(evaluation).onConflictDoUpdate({ target: candidateEvaluations.wallet, set: evaluation }); }
+  async getCandidateEvaluation(wallet: string): Promise<CandidateEvaluation | null> { const [row] = await this.db.select().from(candidateEvaluations).where(eq(candidateEvaluations.wallet, wallet)).limit(1); return row === undefined ? null : { ...row, state: row.state as CandidateEvaluation["state"] }; }
+  async listCandidateEvaluations(limit: number): Promise<CandidateEvaluation[]> { return (await this.db.select().from(candidateEvaluations).orderBy(desc(candidateEvaluations.evaluatedAt)).limit(limit)).map((row) => ({ ...row, state: row.state as CandidateEvaluation["state"] })); }
+  async insertResearchRun(run: ResearchRun): Promise<void> { await this.db.insert(researchRuns).values(run); }
+  async updateResearchRun(run: ResearchRun): Promise<void> { await this.db.update(researchRuns).set(run).where(eq(researchRuns.id, run.id)); }
+  async listResearchRuns(limit: number): Promise<ResearchRun[]> { return (await this.db.select().from(researchRuns).orderBy(desc(researchRuns.startedAt)).limit(limit)).map((row) => ({ ...row, kind: row.kind as ResearchRun["kind"], status: row.status as ResearchRun["status"] })); }
 }
 
-export function createPostgresStore(databaseUrl: string): { store: PostgresIntelligenceStore; close: () => Promise<void>; ping: () => Promise<void> } {
+export function createPostgresStore(databaseUrl: string): { store: PostgresIntelligenceStore; close: () => Promise<void>; ping: () => Promise<void>; schemaReady: () => Promise<void>; pruneRawPayloads: (retentionDays: number, apply: boolean) => Promise<{ chainTransactions: number; webhookDeliveries: number; applied: boolean; cutoff: string }> } {
   const client = postgres(databaseUrl, { max: 10, prepare: false });
   const db = drizzle(client);
   return {
     store: new PostgresIntelligenceStore(db),
     close: async () => { await client.end(); },
-    ping: async () => { await client`select 1`; }
+    ping: async () => { await client`select 1`; },
+    schemaReady: async () => { const [row] = await client<{ runtime_jobs: string | null; operator_sessions: string | null }[]>`select to_regclass('public.runtime_jobs')::text as runtime_jobs, to_regclass('public.operator_sessions')::text as operator_sessions`; if (row?.runtime_jobs === null || row?.operator_sessions === null) throw new Error("Required runtime schema is missing; run pnpm db:migrate"); },
+    pruneRawPayloads: async (retentionDays, apply) => {
+      const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
+      const [chain] = await client<{ count: number }[]>`select count(*)::int as count from chain_transactions where observed_at < ${cutoff} and not (raw_payload ? 'retained')`;
+      const [webhooks] = await client<{ count: number }[]>`select count(*)::int as count from webhook_deliveries where received_at < ${cutoff} and not (raw_payload ? 'retained')`;
+      if (apply) await client.begin(async (tx) => { await tx`update chain_transactions set raw_payload = jsonb_build_object('retained', false, 'prunedAt', ${new Date().toISOString()}) where observed_at < ${cutoff} and not (raw_payload ? 'retained')`; await tx`update webhook_deliveries set raw_payload = jsonb_build_object('retained', false, 'prunedAt', ${new Date().toISOString()}) where received_at < ${cutoff} and not (raw_payload ? 'retained')`; });
+      return { chainTransactions: chain?.count ?? 0, webhookDeliveries: webhooks?.count ?? 0, applied: apply, cutoff };
+    }
   };
 }
 

@@ -3,10 +3,11 @@ import { z } from "zod";
 import type { JsonValue, MarketObservation, MarketQuoteRequest, MarketQuoteResult } from "@intelligence/core";
 import type { QuoteMarketDataProvider } from "./interfaces.js";
 
-export type JupiterMarketErrorCode = "DISABLED_NO_API_KEY" | "HTTP_ERROR" | "RATE_LIMITED" | "TIMEOUT" | "MALFORMED_RESPONSE";
+export type JupiterAuthMode = "AUTO" | "API_KEY" | "KEYLESS" | "DISABLED";
+export type JupiterMarketErrorCode = "DISABLED" | "DISABLED_NO_API_KEY" | "MISSING_API_KEY" | "UNAUTHORIZED" | "HTTP_ERROR" | "RATE_LIMITED" | "TIMEOUT" | "MALFORMED_RESPONSE";
 
 export class JupiterMarketError extends Error {
-  constructor(readonly code: JupiterMarketErrorCode, message: string, readonly retryable: boolean) { super(message); }
+  constructor(readonly code: JupiterMarketErrorCode, message: string, readonly retryable: boolean, readonly status: number | null = null) { super(message); }
 }
 
 const decimalString = z.string().regex(/^-?\d+(?:\.\d+)?$/);
@@ -26,20 +27,24 @@ export interface JupiterMarketOptions {
   maximumAttempts?: number;
   retryDelayMs?: number;
   fetchImplementation?: typeof fetch;
+  authMode?: JupiterAuthMode;
 }
 
 export class JupiterSwapV2MarketDataProvider implements QuoteMarketDataProvider {
   readonly name = "jupiter-swap-v2";
   readonly enabled: boolean;
+  readonly authMode: Exclude<JupiterAuthMode, "AUTO">;
   private readonly request: typeof fetch;
 
   constructor(private readonly options: JupiterMarketOptions) {
-    this.enabled = options.apiKey !== undefined;
+    this.authMode = resolveAuthMode(options.authMode ?? "AUTO", options.apiKey);
+    this.enabled = this.authMode !== "DISABLED";
     this.request = options.fetchImplementation ?? fetch;
   }
 
   async getQuote(request: MarketQuoteRequest): Promise<MarketQuoteResult> {
-    if (!this.enabled) throw new JupiterMarketError("DISABLED_NO_API_KEY", "Jupiter quote provider is disabled because JUPITER_API_KEY is not configured", false);
+    if (!this.enabled) throw new JupiterMarketError("DISABLED", "Jupiter quote provider is disabled", false);
+    if (this.authMode === "API_KEY" && this.options.apiKey === undefined) throw new JupiterMarketError("MISSING_API_KEY", "Jupiter API-key mode requires JUPITER_API_KEY", false);
     if (request.inputRawAmount <= 0n) throw new JupiterMarketError("MALFORMED_RESPONSE", "Quote amount must be greater than zero", false);
     const requestedAt = new Date().toISOString();
     const attempts = Math.min(3, Math.max(1, this.options.maximumAttempts ?? 2));
@@ -50,16 +55,18 @@ export class JupiterSwapV2MarketDataProvider implements QuoteMarketDataProvider 
         url.searchParams.set("inputMint", request.inputMint);
         url.searchParams.set("outputMint", request.outputMint);
         url.searchParams.set("amount", request.inputRawAmount.toString());
+        const headers: Record<string, string> = { accept: "application/json" };
+        if (this.authMode === "API_KEY" && this.options.apiKey !== undefined) headers["x-api-key"] = this.options.apiKey;
         const response = await this.request(url, {
-          method: "GET", headers: { "x-api-key": this.options.apiKey ?? "", accept: "application/json" },
+          method: "GET", headers,
           signal: AbortSignal.timeout(this.options.timeoutMs ?? 8_000)
         });
         const receivedAt = new Date().toISOString();
         const latencyMs = Date.now() - started;
         if (response.status === 404) return { observation: this.noRoute(request, requestedAt, receivedAt, latencyMs), errorCode: "NO_ROUTE" };
         if (!response.ok) {
-          const code = response.status === 429 ? "RATE_LIMITED" : "HTTP_ERROR";
-          throw new JupiterMarketError(code, `Jupiter Swap V2 order request failed with HTTP ${response.status}`, response.status === 429 || response.status >= 500);
+          const code = response.status === 429 ? "RATE_LIMITED" : response.status === 401 || response.status === 403 ? "UNAUTHORIZED" : "HTTP_ERROR";
+          throw new JupiterMarketError(code, `Jupiter Swap V2 order request failed with HTTP ${response.status}`, response.status === 429 || response.status >= 500, response.status);
         }
         const parsed = quoteSchema.safeParse(await response.json());
         if (!parsed.success || parsed.data.inputMint !== request.inputMint || parsed.data.outputMint !== request.outputMint || BigInt(parsed.data.inAmount) !== request.inputRawAmount) {
@@ -103,6 +110,11 @@ export class JupiterSwapV2MarketDataProvider implements QuoteMarketDataProvider 
       routeAvailable: false, requestedAt, receivedAt, providerLatencyMs: latencyMs, transactionIncluded: false
     };
   }
+}
+
+function resolveAuthMode(mode: JupiterAuthMode, apiKey: string | undefined): Exclude<JupiterAuthMode, "AUTO"> {
+  if (mode === "AUTO") return apiKey === undefined ? "KEYLESS" : "API_KEY";
+  return mode;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {

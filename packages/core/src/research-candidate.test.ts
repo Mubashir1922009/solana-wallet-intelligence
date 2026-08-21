@@ -1,0 +1,19 @@
+import { describe, expect, it } from "vitest";
+import { evaluateCandidate } from "./candidate-evaluation.js";
+import { walkForwardReport, type ResearchObservation } from "./research.js";
+import type { WalletReputationSnapshot } from "./runtime-domain.js";
+interface ReportSummary { validOutcomeSample: number; noRouteSample: number; missingSample: number; medianFollowerReturn: number | null }
+interface ReportShape { aggregate: ReportSummary; sampleSize: number; posture: string; windows: Array<{ evaluation: ReportSummary }> }
+const at = "2026-01-01T00:00:00.000Z";
+function reputation(overrides: Partial<WalletReputationSnapshot> = {}): WalletReputationSnapshot { return { id: "id", wallet: "w", observedCandidateBuys: 10, copyableOpportunities: 8, uncopyableOpportunities: 2, medianFollowerReturn: 0.1, followerReturnDistribution: [], medianDeteriorationBps: 20, earlyEntryFrequency: null, crowdingFrequency: 0.1, consistency: 0.8, sampleSize: 10, dataCompleteness: 1, provisionalScore: 75, calculatedAt: at, rulesetHash: "hash", ...overrides }; }
+function observation(day: number, overrides: Partial<ResearchObservation> = {}): ResearchObservation { return { signalAt: `2026-01-${String(day).padStart(2, "0")}T00:00:00.000Z`, decision: "BUY", walletScore: 70, tokenRisk: 0.2, crowding: 0.1, copyabilityKnown: true, routeAvailable: true, followerReturn: 0.1, sourceReturn: 0.2, deteriorationBps: 30, outcomeStatus: "VALID_OBSERVATION", ...overrides }; }
+describe("candidate promotion and walk-forward research", () => {
+  it("requires meaningful sample and independent token evidence", () => expect(evaluateCandidate("w", reputation({ sampleSize: 2 }), 1, {}, at).state).toBe("INSUFFICIENT_DATA"));
+  it("rejects crowded candidates", () => expect(evaluateCandidate("w", reputation({ crowdingFrequency: 0.8 }), 4, {}, at).state).toBe("REJECTED"));
+  it("promotes only provisional threshold passes", () => expect(evaluateCandidate("w", reputation(), 4, { knownThen: true }, at)).toMatchObject({ state: "TRACK_ELIGIBLE", evidenceAtEvaluation: { knownThen: true } }));
+  it("rejects weak follower expectancy", () => expect(evaluateCandidate("w", reputation({ provisionalScore: 20 }), 4, {}, at).reasonCodes).toContain("FOLLOWER_EXPECTANCY_THRESHOLD_NOT_MET"));
+  it("separates missing and no-route from zero returns", () => { const report = walkForwardReport([observation(1), observation(2, { outcomeStatus: "NO_ROUTE", followerReturn: null }), observation(3, { outcomeStatus: "MISSING_OBSERVATION", followerReturn: null })], { trainingMs: 86_400_000, evaluationMs: 86_400_000 * 5, stepMs: 86_400_000 }) as unknown as ReportShape; expect(report.aggregate).toMatchObject({ validOutcomeSample: 1, noRouteSample: 1, missingSample: 1 }); });
+  it("reports sample sizes and shadow posture", () => { const report = walkForwardReport([observation(1), observation(3)], { trainingMs: 86_400_000, evaluationMs: 86_400_000 * 5, stepMs: 86_400_000 }) as unknown as ReportShape; expect(report.sampleSize).toBe(2); expect(report.posture).toMatch(/NOT REAL EXECUTION/); });
+  it("is reproducible regardless of input order", () => { const opts = { trainingMs: 86_400_000, evaluationMs: 86_400_000 * 5, stepMs: 86_400_000 }; expect(walkForwardReport([observation(3), observation(1)], opts)).toEqual(walkForwardReport([observation(1), observation(3)], opts)); });
+  it("isolates evaluation periods from training periods", () => { const report = walkForwardReport([observation(1, { followerReturn: 9 }), observation(3, { followerReturn: -0.2 })], { trainingMs: 86_400_000, evaluationMs: 86_400_000 * 5, stepMs: 86_400_000 }) as unknown as ReportShape; expect(report.windows[0]?.evaluation.medianFollowerReturn).toBe(-0.2); });
+});

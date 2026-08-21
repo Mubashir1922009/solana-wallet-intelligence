@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 interface ComponentHealth { component: string; status: "healthy" | "degraded" | "disabled" | "unknown"; detail: string; latencyMs: number | null }
-interface SystemStatus { executionMode: string; network: string; killSwitchActive: boolean; watcherPaused: boolean; lastProcessedSlot: string | null; queueLagMs: number | null; live: null | { status: string; activeSubscriptions: number; desiredSubscriptions: number; reconnectCount: number }; providerBudgets: Array<{ provider: string; calls: number; rateLimited: number; retries: number; averageLatencyMs: number | null; degraded: boolean }>; components: ComponentHealth[] }
+interface SystemStatus { executionMode: string; network: string; killSwitchActive: boolean; watcherPaused: boolean; lastProcessedSlot: string | null; queueLagMs: number | null; live: null | { status: string; activeSubscriptions: number; desiredSubscriptions: number; reconnectCount: number }; worker?: { health: "HEALTHY" | "STALE" | "OFFLINE"; lease: null | { workerId: string; heartbeatAt: string; queueDepth: number } }; providerBudgets: Array<{ provider: string; calls: number; rateLimited: number; retries: number; averageLatencyMs: number | null; degraded: boolean }>; components: ComponentHealth[] }
 interface Wallet { id: string; publicKey: string; status: string; dataConfidence: number | null; metrics: null | { sampleSize: number; earlyEntryScore: number | null; copyabilityScore: number | null; crowdingScore: number | null } }
 interface Signal { id: string; sourceWallet: string; tokenMint: string; detectedAt: string; decision: string; antiCrowdingScore: number | null; rejectionReasons: string[]; walletScore: { total: number } }
 interface Position { id: string; tokenMint: string; triggerWallet: string; simulatedEntryPriceUsd: string | null; simulatedUsdAmount: string; markPriceUsd: string | null; unrealizedPnlUsd: string | null; state: string; openedAt: string; exitRecommendation: string | null }
@@ -29,15 +29,23 @@ export function CommandCenter(): React.ReactElement {
   const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
   const [selected, setSelected] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [authState, setAuthState] = useState<"checking" | "authenticated" | "signed_out">("checking");
+  const [password, setPassword] = useState("");
+  const [loginMessage, setLoginMessage] = useState<string | null>(null);
+  const [research, setResearch] = useState<{ candidates: Array<{ wallet: string; state: string; sampleSize: number; provisionalScore: number | null }> } | null>(null);
+  const [security, setSecurity] = useState<{ activeSessions: number; events: Array<{ id: string; type: string; occurredAt: string }> } | null>(null);
+  const csrf = (): string => window.sessionStorage.getItem("operator_csrf") ?? "";
 
   const refresh = useCallback(async () => {
     try {
-      const paths = ["system/status", "wallets", "signals", "positions", "copyability/recent?limit=20", "token-risk/recent?limit=20", "notifications?limit=20"];
-      const responses = await Promise.all(paths.map(async (path) => fetch(`${apiUrl}/api/${path}`)));
+      const paths = ["system/status", "wallets", "signals", "positions", "copyability/recent?limit=20", "token-risk/recent?limit=20", "notifications?limit=20", "research?limit=20", "security"];
+      const responses = await Promise.all(paths.map(async (path) => fetch(`${apiUrl}/api/${path}`, { credentials: "include" })));
+      if (responses.some((response) => response.status === 401)) { setAuthState("signed_out"); return; }
       if (!responses.every((response) => response.ok)) throw new Error("API unavailable");
-      const [nextStatus, nextWallets, nextSignals, nextPositions, nextCopyability, nextRisk, nextNotifications] = await Promise.all(responses.map(async (response) => response.json() as Promise<unknown>));
+      const [nextStatus, nextWallets, nextSignals, nextPositions, nextCopyability, nextRisk, nextNotifications, nextResearch, nextSecurity] = await Promise.all(responses.map(async (response) => response.json() as Promise<unknown>));
       setStatus(nextStatus as SystemStatus); setWallets(nextWallets as Wallet[]); setSignals(nextSignals as Signal[]);
       setPositions(nextPositions as Position[]); setCopyability(nextCopyability as Copyability[]); setTokenRisk(nextRisk as TokenRisk[]); setNotifications(nextNotifications as Notification[]);
+      setResearch(nextResearch as typeof research); setSecurity(nextSecurity as typeof security); setAuthState("authenticated");
       setSelected((current) => current ?? (nextPositions as Position[])[0]?.id ?? null);
       setConnection("live");
     } catch { setConnection("offline"); }
@@ -45,15 +53,16 @@ export function CommandCenter(): React.ReactElement {
 
   useEffect(() => {
     void refresh();
-    const stream = new EventSource(`${apiUrl}/api/stream`);
+    if (authState === "signed_out") return;
+    const stream = new EventSource(`${apiUrl}/api/stream`, { withCredentials: true });
     stream.addEventListener("snapshot", () => { setConnection("live"); void refresh(); });
     stream.onerror = () => setConnection("offline");
     const timer = window.setInterval(() => void refresh(), 30_000);
     return () => { stream.close(); window.clearInterval(timer); };
-  }, [refresh]);
+  }, [refresh, authState]);
 
   const position = positions.find((item) => item.id === selected) ?? null;
-  const post = async (path: string): Promise<Response> => fetch(`${apiUrl}/api/${path}`, { method: "POST" });
+  const post = async (path: string): Promise<Response> => fetch(`${apiUrl}/api/${path}`, { method: "POST", credentials: "include", headers: { "x-csrf-token": csrf() } });
   const act = async (operation: "wait" | "recalculate" | "authorize-paper-sell"): Promise<void> => {
     if (position === null) return;
     setActionMessage("Submitting...");
@@ -69,16 +78,22 @@ export function CommandCenter(): React.ReactElement {
     await refresh();
   };
   const runtimeAction = async (path: string): Promise<void> => { await post(`runtime/${path}`); await refresh(); };
+  const login = async (event: React.FormEvent): Promise<void> => { event.preventDefault(); setLoginMessage("Authenticating..."); const response = await fetch(`${apiUrl}/api/auth/login`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) }); if (!response.ok) { setLoginMessage(response.status === 429 ? "Too many attempts. Wait before retrying." : "Credential rejected."); return; } const body = await response.json() as { csrfToken: string }; window.sessionStorage.setItem("operator_csrf", body.csrfToken); setPassword(""); setAuthState("authenticated"); setLoginMessage(null); await refresh(); };
+  const logout = async (): Promise<void> => { await post("auth/logout"); window.sessionStorage.removeItem("operator_csrf"); setAuthState("signed_out"); };
+
+  if (authState !== "authenticated") return <main className="login-shell"><section className="login-card"><span className="brandmark">S</span><p className="eyebrow">SINGLE OPERATOR / SHADOW ONLY</p><h1>Signal Deck</h1><p>Authenticate to access wallet intelligence, simulated positions, and remote shadow controls.</p><form onSubmit={(event) => void login(event)}><label htmlFor="operator-password">Operator password</label><input id="operator-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required/><button type="submit" disabled={authState === "checking"}>{authState === "checking" ? "CHECKING SESSION" : "ENTER COMMAND CENTER"}</button></form>{loginMessage !== null && <small role="status">{loginMessage}</small>}<footer>NO SIGNER / NO BROADCASTER / NO REAL MONEY</footer></section></main>;
 
   return <main>
     <header className="topbar">
       <div className="brand"><span className="brandmark">S</span><div><strong>Signal Deck</strong><small>Solana wallet intelligence</small></div></div>
       <div className="status-strip">
         <span className="status-pill"><Dot state={connection === "live" ? "healthy" : connection === "offline" ? "degraded" : "unknown"} />{connection}</span>
+        <span className="status-pill">Worker <b>{status?.worker?.health ?? "UNKNOWN"}</b></span>
         <span className="status-pill">Network <b>{status?.network ?? "Unknown"}</b></span>
         <span className="mode-pill">{status?.executionMode ?? "PAPER"} / SIMULATED</span>
         <button className="status-pill" onClick={() => void runtimeAction(status?.watcherPaused ? "watcher/resume" : "watcher/pause")}>Watcher <b>{status?.watcherPaused ? "PAUSED" : status?.live?.status ?? "Unknown"}</b></button>
         <button className={`status-pill ${status?.killSwitchActive ? "danger" : ""}`} onClick={() => void runtimeAction(status?.killSwitchActive ? "shadow/restore" : "shadow/kill")}>Kill <b>{status?.killSwitchActive ? "ACTIVE" : "Ready"}</b></button>
+        <button className="status-pill" onClick={() => void logout()}>Session <b>LOGOUT</b></button>
       </div>
     </header>
 
@@ -92,6 +107,10 @@ export function CommandCenter(): React.ReactElement {
     <section className="grid equal">
       <article className="panel"><PanelHeader title="Token risk" meta={`${tokenRisk.length} evaluations`} />{tokenRisk.slice(0, 8).map((risk) => <div className="health-row" key={risk.id}><span>{compact(risk.tokenMint)}</span><b className={risk.totalRisk >= .6 ? "negative" : "positive"}>{Math.round(risk.totalRisk * 100)}%</b><small>{risk.confidence} / {risk.reasonCodes[0] ?? "clear"}</small></div>)}{tokenRisk.length === 0 && <Empty text="No token risk evaluation is stored yet." />}</article>
       <article className="panel"><PanelHeader title="Durable alerts" meta={`${notifications.length} deliveries`} />{notifications.slice(0, 8).map((item) => <div className="health-row" key={item.id}><span>{item.category.replaceAll("_", " ")}</span><b className={item.status === "FAILED" ? "negative" : "positive"}>{item.status}</b><small>{item.errorCode ?? new Date(item.createdAt).toLocaleTimeString()}</small></div>)}{notifications.length === 0 && <Empty text="No notification delivery has been recorded." />}</article>
+    </section>
+    <section className="grid equal">
+      <article className="panel"><PanelHeader title="Research calibration" meta={`${research?.candidates.length ?? 0} candidates`} />{(research?.candidates ?? []).slice(0, 8).map((item) => <div className="health-row" key={item.wallet}><span>{compact(item.wallet)}</span><b>{item.state}</b><small>n={item.sampleSize} / {item.provisionalScore === null ? "Unknown" : item.provisionalScore.toFixed(1)}</small></div>)}{research?.candidates.length === 0 && <Empty text="No evidence-complete candidate evaluation yet."/>}</article>
+      <article className="panel"><PanelHeader title="Operator security" meta={`${security?.activeSessions ?? 0} active session`} />{(security?.events ?? []).slice(0, 8).map((item) => <div className="health-row" key={item.id}><span>{item.type.replaceAll("_", " ")}</span><b>audited</b><small>{new Date(item.occurredAt).toLocaleTimeString()}</small></div>)}{security?.events.length === 0 && <Empty text="No recent security events."/>}</article>
     </section>
 
     <section className="panel copyability-panel"><PanelHeader title="Copyability ledger" meta={`${copyability.length} recent evaluations`} /><div className="copy-head"><span>Source / token</span><span>Source price</span><span>Follower quote</span><span>Deterioration</span><span>Detection</span><span>Total latency</span><span>Confidence</span></div>{copyability.map((item) => <div className="copy-row" key={item.id}><span><b>{compact(item.sourceWallet)}</b><small>{compact(item.tokenMint)} / {compact(item.sourceTransactionSignature)}</small></span><span>{item.sourceEffectivePrice ?? "Unknown"}</span><span>{item.followerQuotedPrice ?? "Unknown"}</span><span className={item.entryPriceDeteriorationBps !== null && item.entryPriceDeteriorationBps > 0 ? "negative" : "positive"}>{item.entryPriceDeteriorationBps === null ? "Unknown" : `${item.entryPriceDeteriorationBps} bps`}</span><span>{milliseconds(item.detectionLatencyMs)}</span><span>{milliseconds(item.totalFollowerLatencyMs)}</span><span><i className={`confidence ${item.status.toLowerCase()}`}>{item.confidence}</i><small>{item.status === "KNOWN" ? "Complete observation" : item.reasons.join(", ") || item.status}</small></span></div>)}{copyability.length === 0 && <Empty text="No copyability evaluation is stored yet. Missing quotes and timings remain explicitly unknown." />}</section>

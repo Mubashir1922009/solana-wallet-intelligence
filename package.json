@@ -6,17 +6,23 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "corepack pnpm@10.15.1 --parallel --filter @intelligence/api --filter @intelligence/dashboard dev",
+    "dev": "corepack pnpm@10.15.1 --parallel --filter @intelligence/api --filter @intelligence/worker --filter @intelligence/dashboard dev",
     "dev:api": "corepack pnpm@10.15.1 --filter @intelligence/api dev",
     "dev:dashboard": "corepack pnpm@10.15.1 --filter @intelligence/dashboard dev",
+    "dev:worker": "corepack pnpm@10.15.1 --filter @intelligence/worker dev",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "build": "corepack pnpm@10.15.1 --filter @intelligence/api build && corepack pnpm@10.15.1 --filter @intelligence/dashboard build",
+    "test": "vitest run --config vitest.config.ts --configLoader runner",
+    "test:watch": "vitest --config vitest.config.ts --configLoader runner",
+    "build": "corepack pnpm@10.15.1 --filter @intelligence/api build && corepack pnpm@10.15.1 --filter @intelligence/worker build && corepack pnpm@10.15.1 --filter @intelligence/dashboard build",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "tsx packages/database/src/migrate.ts",
-    "db:check": "tsx scripts/validate-migrations.ts"
+    "db:check": "tsx scripts/validate-migrations.ts",
+    "research:report": "tsx scripts/research-report.ts",
+    "shadow:soak": "tsx scripts/shadow-soak.ts",
+    "secrets:generate": "tsx scripts/generate-secrets.ts",
+    "maintenance:prune-raw": "tsx scripts/prune-raw-payloads.ts",
+    "performance:validate": "tsx scripts/performance-validation.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.34.0",

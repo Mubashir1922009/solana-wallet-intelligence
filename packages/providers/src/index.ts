@@ -3,6 +3,8 @@ export * from "./helius.js";
 export * from "./solana-rpc.js";
 export * from "./fallback-chain.js";
 export * from "./jupiter.js";
+export * from "./jupiter-tokens.js";
+export * from "./telegram-control.js";
 export * from "./openrouter.js";
 export * from "./execution.js";
 export * from "./notifications.js";

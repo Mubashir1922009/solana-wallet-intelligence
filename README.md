@@ -6,7 +6,7 @@ A strict TypeScript foundation for evaluating whether publicly observable Solana
 
 - Node.js 22 or newer (validated here with Node 24.18.0)
 - Corepack
-- PostgreSQL 16 and Redis 7, either locally or through Docker Compose
+- PostgreSQL 16. Redis 7 is optional and never authoritative.
 
 Docker is optional for tests and builds. It is only a convenience for local durable services.
 
@@ -20,7 +20,7 @@ corepack pnpm@10.15.1 db:migrate
 corepack pnpm@10.15.1 dev
 ```
 
-If Docker is not installed, start compatible PostgreSQL and Redis instances yourself and update `DATABASE_URL` and `REDIS_URL` in `.env`.
+If Docker is unavailable, use a project-scoped PostgreSQL instance. Redis can be omitted.
 
 API: `http://127.0.0.1:4000`
 
@@ -28,9 +28,9 @@ Dashboard: `http://127.0.0.1:3000`
 
 Health: `http://127.0.0.1:4000/health`
 
-`SOLANA_RPC_URL` is the baseline history source and `SOLANA_WS_URL` drives the default continuous `logsSubscribe` watcher. `HELIUS_API_KEY` enables a `getTransactionsForAddress` signature-discovery fallback, while transaction bodies still pass through the same `getTransaction` normalizer. `JUPITER_API_KEY` enables quote-only Swap V2 market observations and shadow positions. Provider credentials remain server-side.
+`apps/api` owns HTTP/auth/webhooks and `apps/worker` exclusively owns the watcher and durable jobs. Jupiter `AUTO` uses a server API key when configured and otherwise the documented keyless tier with a conservative budget. Provider credentials remain server-side.
 
-The API connects the watcher at startup, restores tracked wallets within `MAX_LIVE_SUBSCRIPTIONS`, recovers gaps from each wallet's durable signature boundary after reconnect, and marks open shadow positions on `POSITION_MARK_INTERVAL_MS`. See [RUNTIME.md](./docs/RUNTIME.md) for lifecycle, capacity, degradation, and control behavior.
+The worker acquires a PostgreSQL leadership lease, restores tracked wallets and open-position jobs, reclaims expired job leases, and resumes overdue research. See [RUNTIME.md](./docs/RUNTIME.md) and [DURABILITY.md](./docs/DURABILITY.md).
 
 ## Validation
 
@@ -71,7 +71,9 @@ Helius webhook authentication is optional for local development, but when `HELIU
 - Jupiter integration requests order quotes without a `taker`; it never requests a transaction, signs, or calls `/execute`.
 - A sell recommendation cannot close even a paper position; explicit paper authorization is required.
 - OpenRouter is optional and outside ingestion and deterministic decision paths.
-- Telegram is optional and disabled unless both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are present; delivery attempts are persisted.
+- Telegram notification/control requires bot, chat, user, and webhook-secret settings. Callback actions are expiring, one-time, and shadow-only.
 - Watcher pause and shadow kill are separate controls: killing shadow entries does not stop position marking, and neither control adds a transaction signer.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md), [SECURITY.md](./SECURITY.md), [COPYABILITY.md](./docs/COPYABILITY.md), and the documents under `docs/` before extending provider or execution behavior.
+
+Operational commands: `pnpm research:report`, `pnpm shadow:soak -- --duration=10m --wallet-count=5`, `pnpm performance:validate`, `pnpm maintenance:prune-raw` (dry run), and `pnpm secrets:generate <session|telegram-webhook|password-hash>`.

@@ -15,7 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { EntryMarketSnapshot, TokenRiskSnapshot, WalletScore } from "@intelligence/core";
-import type { ShadowPositionContext, TokenConcentrationObservation, TokenMintObservation, TokenRiskComponent, WalletReputationSnapshot } from "@intelligence/core";
+import type { CandidateEvaluation, OperatorSecurityEvent, ResearchRun, RuntimeJob, ShadowPositionContext, TokenConcentrationObservation, TokenMintObservation, TokenRiskComponent, WalletReputationSnapshot } from "@intelligence/core";
 import type { JsonValue } from "@intelligence/shared";
 
 export const walletStatus = pgEnum("wallet_status", ["candidate", "tracking", "rejected", "paused", "insufficient_data"]);
@@ -198,7 +198,8 @@ export const notifications = pgTable("notifications", {
   id: uuid("id").primaryKey(), type: text("type").notNull(), payload: jsonb("payload").$type<JsonValue>().notNull(),
   provider: text("provider").notNull(), deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: "string" }),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(), status: text("status").notNull().default("PENDING"),
-  errorCode: text("error_code"), attemptedAt: timestamp("attempted_at", { withTimezone: true, mode: "string" }), idempotencyKey: text("idempotency_key")
+  errorCode: text("error_code"), attemptedAt: timestamp("attempted_at", { withTimezone: true, mode: "string" }), idempotencyKey: text("idempotency_key"),
+  attemptCount: integer("attempt_count").notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true, mode: "string" }), responseClass: text("response_class")
 }, (table) => [index("notifications_created_idx").on(table.createdAt), uniqueIndex("notifications_idempotency_uidx").on(table.idempotencyKey)]);
 
 export const systemHealth = pgTable("system_health", {
@@ -299,9 +300,60 @@ export const candidateDiscoveries = pgTable("candidate_discoveries", {
 export const forwardReturnObservations = pgTable("forward_return_observations", {
   id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), transactionSignature: text("transaction_signature").notNull(), tokenMint: text("token_mint").notNull(), windowMs: integer("window_ms").notNull(),
   status: text("status").notNull(), entryMarketObservationId: uuid("entry_market_observation_id"), forwardMarketObservationId: uuid("forward_market_observation_id"), followerReturn: doublePrecision("follower_return"),
-  observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(), idempotencyKey: text("idempotency_key").notNull()
+  observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(), requestedAt: timestamp("requested_at", { withTimezone: true, mode: "string" }), latenessMs: integer("lateness_ms"), idempotencyKey: text("idempotency_key").notNull()
 }, (table) => [uniqueIndex("forward_return_idempotency_uidx").on(table.idempotencyKey), index("forward_return_wallet_time_idx").on(table.wallet, table.observedAt)]);
 
 export const walletReputationSnapshots = pgTable("wallet_reputation_snapshots", {
   id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), snapshot: jsonb("snapshot").$type<WalletReputationSnapshot>().notNull(), calculatedAt: timestamp("calculated_at", { withTimezone: true, mode: "string" }).notNull()
 }, (table) => [uniqueIndex("wallet_reputation_wallet_uidx").on(table.wallet)]);
+
+export const runtimeJobs = pgTable("runtime_jobs", {
+  id: uuid("id").primaryKey(), type: text("type").notNull(), payload: jsonb("payload").$type<RuntimeJob["payload"]>().notNull(), status: text("status").notNull(),
+  runAt: timestamp("run_at", { withTimezone: true, mode: "string" }).notNull(), createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }), completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }), attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull(), leaseOwner: text("lease_owner"), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "string" }),
+  lastError: text("last_error"), idempotencyKey: text("idempotency_key").notNull()
+}, (table) => [uniqueIndex("runtime_jobs_idempotency_uidx").on(table.idempotencyKey), index("runtime_jobs_claim_idx").on(table.status, table.runAt), index("runtime_jobs_lease_idx").on(table.status, table.leaseExpiresAt)]);
+
+export const workerLeases = pgTable("worker_leases", {
+  role: text("role").primaryKey(), workerId: text("worker_id").notNull(), startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true, mode: "string" }).notNull(), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "string" }).notNull(),
+  status: text("status").notNull(), lastProcessedSlot: bigint("last_processed_slot", { mode: "bigint" }), activeSubscriptions: integer("active_subscriptions").notNull().default(0),
+  queueDepth: integer("queue_depth").notNull().default(0), revision: text("revision")
+}, (table) => [index("worker_leases_expiry_idx").on(table.leaseExpiresAt)]);
+
+export const operatorSessions = pgTable("operator_sessions", {
+  id: uuid("id").primaryKey(), tokenHash: text("token_hash").notNull(), csrfHash: text("csrf_hash").notNull(), createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }).notNull(), revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "string" }), clientLabel: text("client_label")
+}, (table) => [uniqueIndex("operator_sessions_token_hash_uidx").on(table.tokenHash), index("operator_sessions_expiry_idx").on(table.expiresAt, table.revokedAt)]);
+
+export const operatorSecurityEvents = pgTable("operator_security_events", {
+  id: uuid("id").primaryKey(), type: text("type").notNull(), occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+  sessionId: uuid("session_id"), actor: text("actor").notNull(), clientLabel: text("client_label"), details: jsonb("details").$type<OperatorSecurityEvent["details"]>().notNull()
+}, (table) => [index("operator_security_events_time_idx").on(table.occurredAt), index("operator_security_events_type_idx").on(table.type)]);
+
+export const telegramInteractions = pgTable("telegram_interactions", {
+  nonceHash: text("nonce_hash").primaryKey(), positionId: uuid("position_id").notNull().references(() => paperPositions.id, { onDelete: "cascade" }), action: text("action").notNull(),
+  expectedPositionState: text("expected_position_state").notNull(), createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }).notNull(), consumedAt: timestamp("consumed_at", { withTimezone: true, mode: "string" }), updateId: text("update_id")
+}, (table) => [uniqueIndex("telegram_interactions_update_uidx").on(table.updateId), index("telegram_interactions_expiry_idx").on(table.expiresAt)]);
+
+export const tokenDiscoveries = pgTable("token_discoveries", {
+  mint: text("mint").primaryKey(), firstPoolCreatedAt: timestamp("first_pool_created_at", { withTimezone: true, mode: "string" }), symbol: text("symbol"), name: text("name"), decimals: integer("decimals"),
+  organicScore: doublePrecision("organic_score"), organicScoreLabel: text("organic_score_label"), provider: text("provider").notNull(), provenance: text("provenance").notNull(),
+  firstObservedAt: timestamp("first_observed_at", { withTimezone: true, mode: "string" }).notNull(), lastObservedAt: timestamp("last_observed_at", { withTimezone: true, mode: "string" }).notNull(),
+  providerObservedAt: timestamp("provider_observed_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [index("token_discoveries_pool_time_idx").on(table.firstPoolCreatedAt), index("token_discoveries_observed_idx").on(table.lastObservedAt)]);
+
+export const candidateEvaluations = pgTable("candidate_evaluations", {
+  wallet: text("wallet").primaryKey(), state: text("state").notNull(), sampleSize: integer("sample_size").notNull(), independentTokenCount: integer("independent_token_count").notNull(),
+  provisionalScore: doublePrecision("provisional_score"), evidenceAtEvaluation: jsonb("evidence_at_evaluation").$type<CandidateEvaluation["evidenceAtEvaluation"]>().notNull(),
+  reasonCodes: jsonb("reason_codes").$type<string[]>().notNull(), evaluatedAt: timestamp("evaluated_at", { withTimezone: true, mode: "string" }).notNull(), rulesetHash: text("ruleset_hash").notNull()
+}, (table) => [index("candidate_evaluations_state_score_idx").on(table.state, table.provisionalScore)]);
+
+export const researchRuns = pgTable("research_runs", {
+  id: uuid("id").primaryKey(), kind: text("kind").notNull(), startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }), status: text("status").notNull(), parameters: jsonb("parameters").$type<ResearchRun["parameters"]>().notNull(),
+  report: jsonb("report").$type<ResearchRun["report"]>(), errorCode: text("error_code")
+}, (table) => [index("research_runs_kind_time_idx").on(table.kind, table.startedAt)]);

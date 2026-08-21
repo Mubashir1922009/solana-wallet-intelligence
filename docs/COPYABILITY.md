@@ -9,3 +9,5 @@ The evaluation stores source block time, transaction observation, normalization,
 This is an observation, not a fill claim. Jupiter `/order` without a taker supplies market quote data only. Route availability and price impact can change before any future transaction is built, signed, landed, and confirmed.
 
 Anti-crowding is complementary. It counts observed monitored wallets buying the same token in provisional 5s/30s/60s windows, stores coverage, and distinguishes no observed followers from unknown observation coverage. Thresholds are explicitly provisional until calibrated on replay data.
+
+Wallet reputation emphasizes follower outcomes: valid quote-based forward returns, no-route frequency, copyability sample validity, trimmed mean, downside distribution, win/loss rate, maximum observed loss, signal latency, and independent-token sample size. `NO_ROUTE` remains separate from loss and `MISSING_OBSERVATION` remains separate from zero. Source-wallet performance is never substituted for follower expectancy.

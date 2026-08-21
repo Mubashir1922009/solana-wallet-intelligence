@@ -2,7 +2,7 @@
 
 ## Runtime flow
 
-The production API uses standard Solana WebSocket `logsSubscribe` as its default live source. Each active wallet receives one logical subscription. A notification contains only a signature and slot, so the coordinator fetches the full transaction through the configured chain provider, normalizes it with the same deterministic path as historical backfill, classifies it, and persists both the chain record and wallet action idempotently.
+The production worker uses standard Solana WebSocket `logsSubscribe` as its default live source; API replicas never start watchers. Each active wallet receives one logical subscription. A notification contains only a signature and slot, so the coordinator fetches the full transaction through the configured chain provider, normalizes it with the same deterministic path as historical backfill, classifies it, and persists both the chain record and wallet action idempotently.
 
 Candidate buys then pass through wallet scoring, exact token-supply and largest-token-account observation, resolved-owner aggregation, provisional token-risk rules, a fresh Jupiter quote, copyability, and live crowding. The decision is explicitly `BUY`, `OBSERVE`, or `REJECT`. Only `BUY` can open a shadow/paper position, and the full input snapshots and latency record are stored with it.
 
@@ -42,8 +42,10 @@ The runtime limits provider concurrency, deduplicates equal in-flight calls, cac
 
 Discovery is deliberately limited to evidence present in transactions the system already observes. A previously unknown co-signer must recur across independently observed token events before being persisted as a candidate; candidate status is not trust or a claim of special identity. It must still undergo backfill and scoring before tracking.
 
-For observed candidate buys, `FORWARD_RETURN_WINDOWS_MS` schedules quote-based research observations. Each window persists `VALID_OBSERVATION`, `NO_ROUTE`, or `MISSING_OBSERVATION`; missing quotes never become zero returns. These labels update a provisional wallet-reputation snapshot in which capped follower returns carry more weight than copyability and crowding inputs. Scheduled timers are in-process and are not crash-durable; a production scheduler is still required before long-running research claims are complete.
+For observed candidate buys, `FORWARD_RETURN_WINDOWS_MS` creates PostgreSQL jobs for quote-based research observations. Each window persists `VALID_OBSERVATION`, `NO_ROUTE`, or `MISSING_OBSERVATION`; missing quotes never become zero returns. These labels update a provisional wallet-reputation snapshot in which capped follower returns carry more weight than copyability and crowding inputs. Requested time, actual observation time, and lateness are distinct; expired job leases are reclaimed after a crash.
+
+The soak harness defaults to PostgreSQL. When a project database is unavailable, `pnpm shadow:soak -- --store=in-memory --mode=read-only --duration=2m --wallet-count=1 --wallets=<public-key>` validates bounded WebSocket liveness and process metrics only; that mode does not validate database durability or the full shadow pipeline.
 
 ## Operator expectations
 
-Run migrations before startup. PostgreSQL and Redis must be available for the production entrypoint; tests use the explicit in-memory store. Jupiter-dependent shadow entry and position marking are disabled when `JUPITER_API_KEY` is absent. Telegram is disabled unless both Telegram settings are present. OpenRouter is optional and is not an authority in deterministic decisions.
+Run migrations before startup. PostgreSQL is required and Redis is optional; tests use the explicit in-memory store. Jupiter `AUTO` uses a key when present and keyless otherwise. OpenRouter remains optional and non-authoritative.

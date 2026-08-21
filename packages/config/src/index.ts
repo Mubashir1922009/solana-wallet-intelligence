@@ -9,7 +9,7 @@ const environmentSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   DATABASE_URL: z.url("DATABASE_URL must be a valid PostgreSQL URL").startsWith("postgresql://", "DATABASE_URL must use postgresql://"),
-  REDIS_URL: z.url("REDIS_URL must be a valid Redis URL").refine((value) => value.startsWith("redis://") || value.startsWith("rediss://"), "REDIS_URL must use redis:// or rediss://"),
+  REDIS_URL: z.preprocess((value) => value === "" ? undefined : value, z.url("REDIS_URL must be a valid Redis URL").refine((value) => value.startsWith("redis://") || value.startsWith("rediss://"), "REDIS_URL must use redis:// or rediss://").optional()),
   SOLANA_NETWORK: z.string().default("mainnet-beta"),
   SOLANA_RPC_URL: z.url(),
   SOLANA_WS_URL: z.url().refine((value) => value.startsWith("ws://") || value.startsWith("wss://"), "SOLANA_WS_URL must use ws:// or wss://"),
@@ -27,10 +27,20 @@ const environmentSchema = z.object({
   HELIUS_RPC_URL: z.url().default("https://mainnet.helius-rpc.com"),
   HELIUS_WEBHOOK_AUTH: optionalSecret,
   JUPITER_API_KEY: optionalSecret,
+  JUPITER_AUTH_MODE: z.enum(["AUTO", "API_KEY", "KEYLESS", "DISABLED"]).default("AUTO"),
+  JUPITER_KEYLESS_RPS: z.coerce.number().min(0.1).max(0.5).default(0.5),
   OPENROUTER_API_KEY: optionalSecret,
   OPENROUTER_MODEL: z.string().min(1).default("openrouter/free"),
   TELEGRAM_BOT_TOKEN: optionalSecret,
   TELEGRAM_CHAT_ID: optionalSecret,
+  TELEGRAM_USER_ID: optionalSecret,
+  TELEGRAM_WEBHOOK_SECRET: optionalSecret,
+  SESSION_SECRET: z.preprocess((value) => value === "" ? undefined : value, z.string().min(32).optional()),
+  OPERATOR_PASSWORD_HASH: z.preprocess((value) => value === "" ? undefined : value, z.string().startsWith("scrypt$").optional()),
+  SESSION_TTL_MS: z.coerce.number().int().min(300_000).max(604_800_000).default(43_200_000),
+  LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(2).max(20).default(5),
+  LOGIN_WINDOW_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(900_000),
+  CORS_ALLOWED_ORIGIN: z.preprocess((value) => value === "" ? undefined : value, z.url().optional()),
   DASHBOARD_PUBLIC_URL: z.preprocess((value) => value === "" ? undefined : value, z.url().optional()),
   EXECUTION_MODE: z.enum(["PAPER", "SHADOW", "LIVE"]).default("PAPER"),
   PAPER_TRADE_USD: positiveUsd.default("1"),
@@ -40,7 +50,13 @@ const environmentSchema = z.object({
   HISTORY_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
   STABLE_TOKEN_MINT: z.string().min(32).max(44).default("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
   STABLE_TOKEN_DECIMALS: z.coerce.number().int().min(0).max(18).default(6),
-  RECOGNIZED_INPUT_MINTS: z.string().default("SOL,So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+  RECOGNIZED_INPUT_MINTS: z.string().default("SOL,So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+  WORKER_ID: z.string().min(3).default(`worker-${process.pid}`),
+  WORKER_LEASE_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
+  WORKER_POLL_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
+  WORKER_HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(4001),
+  TOKEN_DISCOVERY_INTERVAL_MS: z.coerce.number().int().min(120_000).max(86_400_000).default(300_000),
+  RAW_PAYLOAD_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(14)
 });
 
 export type AppConfig = z.infer<typeof environmentSchema>;
@@ -61,6 +77,9 @@ export function parseConfig(environment: Record<string, string | undefined>): Ap
   if (parsed.EXECUTION_MODE === "LIVE") {
     throw new Error("LIVE execution is disabled: no reviewed live execution provider is installed");
   }
+  if (parsed.JUPITER_AUTH_MODE === "API_KEY" && parsed.JUPITER_API_KEY === undefined) throw new Error("JUPITER_AUTH_MODE=API_KEY requires JUPITER_API_KEY");
+  if (parsed.NODE_ENV === "production" && (parsed.SESSION_SECRET === undefined || parsed.OPERATOR_PASSWORD_HASH === undefined || parsed.CORS_ALLOWED_ORIGIN === undefined)) throw new Error("Production requires SESSION_SECRET, OPERATOR_PASSWORD_HASH, and CORS_ALLOWED_ORIGIN");
+  if (parsed.NODE_ENV === "production" && parsed.EXECUTION_MODE !== "SHADOW") throw new Error("Production remote deployment must explicitly use EXECUTION_MODE=SHADOW");
   return parsed;
 }
 
@@ -75,9 +94,12 @@ export function safeConfigSummary(config: AppConfig): Record<string, string | nu
     maxTradeUsd: config.MAX_TRADE_USD,
     heliusEnabled: config.HELIUS_API_KEY !== undefined,
     openRouterEnabled: config.OPENROUTER_API_KEY !== undefined,
-    jupiterEnabled: config.JUPITER_API_KEY !== undefined,
+    jupiterEnabled: config.JUPITER_AUTH_MODE !== "DISABLED" && (config.JUPITER_AUTH_MODE !== "API_KEY" || config.JUPITER_API_KEY !== undefined),
+    jupiterAuthMode: config.JUPITER_AUTH_MODE,
     telegramEnabled: config.TELEGRAM_BOT_TOKEN !== undefined && config.TELEGRAM_CHAT_ID !== undefined,
     liveProviderMode: config.LIVE_PROVIDER_MODE,
-    maximumLiveSubscriptions: config.MAX_LIVE_SUBSCRIPTIONS
+    maximumLiveSubscriptions: config.MAX_LIVE_SUBSCRIPTIONS,
+    redisEnabled: config.REDIS_URL !== undefined,
+    operatorAuthEnabled: config.SESSION_SECRET !== undefined && config.OPERATOR_PASSWORD_HASH !== undefined
   };
 }

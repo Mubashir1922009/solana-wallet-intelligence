@@ -189,6 +189,8 @@ export interface ForwardReturnObservation {
   forwardMarketObservationId: string | null;
   followerReturn: number | null;
   observedAt: string;
+  requestedAt?: string | null;
+  latenessMs?: number | null;
   idempotencyKey: string;
 }
 
@@ -209,6 +211,16 @@ export interface WalletReputationSnapshot {
   provisionalScore: number;
   calculatedAt: string;
   rulesetHash: string;
+  validCopyabilityEvaluations?: number;
+  noRouteEvents?: number;
+  trimmedMeanFollowerReturn?: number | null;
+  downsideDistribution?: number[];
+  winRate?: number | null;
+  lossRate?: number | null;
+  maximumObservedFollowerLoss?: number | null;
+  medianSignalLatencyMs?: number | null;
+  riskGateRejectionFrequency?: number | null;
+  independentTokenSampleSize?: number;
 }
 
 export type NotificationCategory = "SHADOW_BUY" | "HIGH_SIGNAL_WALLET" | "TOKEN_RISK_CHANGE" | "SOURCE_WALLET_SELL" | "EXIT_RECOMMENDATION" | "SYSTEM_DEGRADED" | "WATCHER_RECONNECTED" | "WATCHER_GAP_RECOVERED" | "KILL_SWITCH";
@@ -223,6 +235,9 @@ export interface NotificationRecord {
   attemptedAt: string | null;
   deliveredAt: string | null;
   idempotencyKey: string;
+  attemptCount?: number;
+  nextAttemptAt?: string | null;
+  responseClass?: "SUCCESS" | "TRANSIENT" | "PERMANENT" | "DISABLED" | null;
 }
 
 export interface ProviderBudgetSnapshot {
@@ -237,6 +252,59 @@ export interface ProviderBudgetSnapshot {
   inFlight: number;
   queued: number;
   degraded: boolean;
+  clientErrors: number;
+  serverErrors: number;
+  cacheHits: number;
+  deduplicatedRequests: number;
+  circuitState: "CLOSED" | "OPEN" | "HALF_OPEN";
+}
+
+export type RuntimeJobType = "POSITION_MARK" | "FORWARD_RETURN" | "WALLET_BACKFILL" | "REPUTATION_RECALCULATION" | "TOKEN_RISK_REFRESH" | "EXIT_RECALCULATION" | "NOTIFICATION_RETRY" | "GAP_RECOVERY" | "TOKEN_DISCOVERY_POLL" | "CANDIDATE_EVALUATION" | "RUNTIME_CONTROL";
+export type RuntimeJobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+export interface RuntimeJob {
+  id: string; type: RuntimeJobType; payload: JsonValue; status: RuntimeJobStatus; runAt: string; createdAt: string;
+  startedAt: string | null; completedAt: string | null; attempts: number; maxAttempts: number;
+  leaseOwner: string | null; leaseExpiresAt: string | null; lastError: string | null; idempotencyKey: string;
+}
+
+export interface WorkerLease {
+  role: "SHADOW_RUNTIME"; workerId: string; startedAt: string; heartbeatAt: string; leaseExpiresAt: string;
+  status: "STARTING" | "HEALTHY" | "STOPPING"; lastProcessedSlot: bigint | null; activeSubscriptions: number;
+  queueDepth: number; revision: string | null;
+}
+
+export interface OperatorSession {
+  id: string; tokenHash: string; csrfHash: string; createdAt: string; expiresAt: string; revokedAt: string | null;
+  lastUsedAt: string | null; clientLabel: string | null;
+}
+
+export type OperatorSecurityEventType = "LOGIN_SUCCEEDED" | "LOGIN_FAILED" | "LOGIN_RATE_LIMITED" | "LOGOUT" | "SESSION_REJECTED" | "CSRF_REJECTED" | "OPERATOR_ACTION" | "TELEGRAM_REJECTED" | "TELEGRAM_ACTION";
+export interface OperatorSecurityEvent {
+  id: string; type: OperatorSecurityEventType; occurredAt: string; sessionId: string | null;
+  actor: "DASHBOARD" | "TELEGRAM" | "SYSTEM"; clientLabel: string | null; details: JsonValue;
+}
+
+export type TelegramAction = "SELL_SHADOW" | "WAIT" | "RECALCULATE" | "MANUAL_CONTROL" | "SYSTEM_CONTROL";
+export interface TelegramInteraction {
+  nonceHash: string; positionId: string; action: TelegramAction; expectedPositionState: string; createdAt: string;
+  expiresAt: string; consumedAt: string | null; updateId: string | null;
+}
+
+export interface TokenDiscovery {
+  mint: string; firstPoolCreatedAt: string | null; symbol: string | null; name: string | null; decimals: number | null;
+  organicScore: number | null; organicScoreLabel: string | null; provider: "JUPITER_TOKENS_V2";
+  provenance: "EXTERNAL_HEURISTIC"; firstObservedAt: string; lastObservedAt: string; providerObservedAt: string;
+}
+
+export type CandidateEvaluationState = "DISCOVERED" | "EVALUATING" | "TRACK_ELIGIBLE" | "TRACKING" | "PAUSED" | "REJECTED" | "INSUFFICIENT_DATA";
+export interface CandidateEvaluation {
+  wallet: string; state: CandidateEvaluationState; sampleSize: number; independentTokenCount: number;
+  provisionalScore: number | null; evidenceAtEvaluation: JsonValue; reasonCodes: string[]; evaluatedAt: string; rulesetHash: string;
+}
+
+export interface ResearchRun {
+  id: string; kind: "WALK_FORWARD" | "SOAK"; startedAt: string; completedAt: string | null;
+  status: "RUNNING" | "COMPLETED" | "FAILED"; parameters: JsonValue; report: JsonValue | null; errorCode: string | null;
 }
 
 export interface ShadowSignalContext {

@@ -16,11 +16,13 @@
 | Missing route, time, decimals, or coverage | UNKNOWN/PARTIAL | Explicit reason codes; never converted to zero |
 | Wallet score | DERIVED | Provisional deterministic rules and stored ruleset hash |
 | AI explanation | ESTIMATED | Optional structured OpenRouter output; never authoritative |
+| Recent tradeable token discovery | EXTERNAL_HEURISTIC | Jupiter Tokens V2 `recent`, ordered by first-pool creation; not mint age or safety |
+| Organic score/label | EXTERNAL_HEURISTIC | Stored with Jupiter provenance; never overrides internal token, wallet, or crowding rules |
 
 ## Official references checked 2026-08-20
 
 - Solana [`getTransaction`](https://solana.com/docs/rpc/http/gettransaction), [`getSignaturesForAddress`](https://solana.com/docs/rpc/http/getsignaturesforaddress), [JSON structures](https://solana.com/docs/rpc/json-structures), and [versioned transactions](https://solana.com/developers/guides/advanced/versions)
 - Helius [`getTransactionsForAddress`](https://www.helius.dev/docs/api-reference/rpc/http/gettransactionsforaddress)
-- Jupiter [Swap V2 Get Order](https://developers.jup.ag/docs/api-reference/swap/order); this implementation omits `taker`, requires the returned transaction field to be null/absent, and intentionally does not call `/execute`
+- Jupiter [Swap V2](https://developers.jup.ag/docs/swap) and [Tokens V2](https://developers.jup.ag/docs/tokens); this implementation omits `taker`, requires transaction to be null/absent, and never invokes execution or submission
 
 Provider contracts can evolve. Re-verify official schemas before changing request or response fields.

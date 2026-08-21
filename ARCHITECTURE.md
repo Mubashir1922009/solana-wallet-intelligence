@@ -26,12 +26,15 @@ flowchart LR
 - `packages/providers` owns standard Solana RPC, optional Helius history fallback/webhook parsing, quote-only Jupiter market data, execution/notification interfaces, the paper provider, and optional OpenRouter calls.
 - `packages/database` owns Drizzle schema, generated migrations, PostgreSQL persistence, and a named test-only in-memory store.
 - `packages/config` validates environment configuration and rejects `LIVE` before service startup.
-- `apps/api` validates HTTP input and delegates business logic to services.
+- `apps/api` owns authenticated operator HTTP, Telegram/Helius webhooks, SSE, liveness, and readiness. It never owns the continuous watcher.
+- `apps/worker` owns PostgreSQL-leased watcher leadership, durable jobs, position marks, discovery polling, and research observations.
 - `apps/dashboard` renders API truth and explicit unknown/empty states. It does not calculate authoritative scores.
 
 ## Event and idempotency model
 
 Transaction signatures are primary keys. Signals are unique by source transaction, wallet, and mint. A paper position is unique by signal. Position event idempotency keys are unique. Helius may retry webhook deliveries; a retry receives a successful `202` response and is counted as a duplicate without creating a second transaction.
+
+Runtime jobs have unique logical keys and atomic row-lock claims using `FOR UPDATE SKIP LOCKED`. Expired `RUNNING` leases are reclaimable. PostgreSQL is authoritative; Redis is only an optional cache/fan-out accelerator.
 
 The webhook parser preserves provider JSON and never infers swaps from marketing descriptions. Historical ingestion discovers bounded signatures, fetches `jsonParsed` transactions with `maxSupportedTransactionVersion: 0`, and derives wallet-owned SOL/SPL balance deltas. Multiple token accounts for one owner/mint are aggregated while account evidence remains attached. Failed, one-sided, incomplete, and multi-asset flows are classified conservatively rather than forced into buys.
 

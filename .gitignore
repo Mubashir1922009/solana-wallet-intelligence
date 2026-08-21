@@ -4,5 +4,6 @@ dist/
 .env
 .env.local
 coverage/
+runtime/reports/
 *.log
 .DS_Store

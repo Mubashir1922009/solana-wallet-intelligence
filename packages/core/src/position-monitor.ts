@@ -6,7 +6,7 @@ import type { PositionMark } from "./runtime-domain.js";
 export interface PositionMonitorStore {
   listPositions(): Promise<PaperPosition[]>;
   insertMarketObservation(observation: MarketObservation): Promise<void>;
-  insertPositionMark(mark: PositionMark): Promise<void>;
+  insertPositionMark(mark: PositionMark): Promise<"inserted" | "duplicate">;
   listPositionMarks(positionId: string, limit: number): Promise<PositionMark[]>;
   updatePosition(position: PaperPosition): Promise<void>;
 }
@@ -30,20 +30,14 @@ export class PositionMonitor {
       const positions = (await this.store.listPositions()).filter((position) => position.state !== "closed");
       const marks: PositionMark[] = [];
       for (const position of positions) {
-        try {
-        const result = await this.quotes.getQuote({ inputMint: position.tokenMint, outputMint: this.options.stableMint, inputRawAmount: position.tokenRawAmount, inputDecimals: position.tokenDecimals, outputDecimals: this.options.stableDecimals });
-        await this.store.insertMarketObservation(result.observation);
-        const previous = await this.store.listPositionMarks(position.id, 1_000);
-        const mark = calculatePositionMark(position, result.observation, previous, now, this.options.maximumQuoteAgeMs);
-        await this.store.insertPositionMark(mark);
-        const updated = { ...position, markPriceUsd: mark.estimatedValueUsd === null ? position.markPriceUsd : divideDecimal(mark.estimatedValueUsd, rawToDecimal(position.tokenRawAmount, position.tokenDecimals), 12), unrealizedPnlUsd: mark.grossUnrealizedPnlUsd, updatedAt: now };
-        await this.store.updatePosition(updated);
-        await this.options.onMark?.(updated, mark);
-        marks.push(mark);
-        } catch (error) { await this.options.onError?.(error, position); }
+        const mark = await this.runPosition(position.id, now); if (mark !== null) marks.push(mark);
       }
       return marks;
     } finally { this.running = false; }
+  }
+  async runPosition(positionId: string, now = new Date().toISOString(), markId?: string): Promise<PositionMark | null> {
+    const position = (await this.store.listPositions()).find((item) => item.id === positionId) ?? null; if (position === null || position.state === "closed") return null;
+    try { const result = await this.quotes.getQuote({ inputMint: position.tokenMint, outputMint: this.options.stableMint, inputRawAmount: position.tokenRawAmount, inputDecimals: position.tokenDecimals, outputDecimals: this.options.stableDecimals }); await this.store.insertMarketObservation(result.observation); const previous = await this.store.listPositionMarks(position.id, 1_000); const calculated = calculatePositionMark(position, result.observation, previous, now, this.options.maximumQuoteAgeMs); const mark = markId === undefined ? calculated : { ...calculated, id: markId }; if (await this.store.insertPositionMark(mark) === "duplicate") return null; const updated = { ...position, markPriceUsd: mark.estimatedValueUsd === null ? position.markPriceUsd : divideDecimal(mark.estimatedValueUsd, rawToDecimal(position.tokenRawAmount, position.tokenDecimals), 12), unrealizedPnlUsd: mark.grossUnrealizedPnlUsd, updatedAt: now }; await this.store.updatePosition(updated); await this.options.onMark?.(updated, mark); return mark; } catch (error) { await this.options.onError?.(error, position); throw error; }
   }
 }
 

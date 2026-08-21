@@ -8,7 +8,7 @@ Exit recommendations only change recommendation/state data. `WAIT` leaves the po
 
 ## SHADOW
 
-Accepted as configuration for evaluation without funds. The current API exposes the mode but does not yet schedule shadow quotes or create shadow-specific position records. This behavior is deliberately incomplete and must be implemented before shadow performance claims are made.
+The worker performs the continuous intelligence pipeline and creates durable simulated positions only. Quote-based marks, recommendations, dashboard controls, and Telegram controls all mutate simulated records. Recommendation alone never closes a position.
 
 ## LIVE
 

@@ -12,7 +12,7 @@ export class ConsoleNotificationProvider implements NotificationProvider {
   }
 }
 
-export interface TelegramOptions { botToken?: string; chatId?: string; dashboardUrl?: string; fetchImplementation?: typeof fetch; timeoutMs?: number }
+export interface TelegramOptions { botToken?: string; chatId?: string; dashboardUrl?: string; fetchImplementation?: typeof fetch; timeoutMs?: number; buildInlineKeyboard?: (type: NotificationType, payload: JsonValue) => Promise<JsonValue | null> }
 export class TelegramNotificationProvider implements NotificationProvider {
   readonly name = "telegram";
   readonly enabled: boolean;
@@ -20,21 +20,24 @@ export class TelegramNotificationProvider implements NotificationProvider {
   constructor(private readonly options: TelegramOptions) { this.enabled = options.botToken !== undefined && options.chatId !== undefined; this.request = options.fetchImplementation ?? fetch; }
   async notify(type: NotificationType, payload: JsonValue): Promise<void> {
     if (!this.enabled) throw new NotificationDeliveryError("DISABLED", "Telegram is not configured");
+    const replyMarkup = await this.options.buildInlineKeyboard?.(type, payload) ?? null;
     const response = await this.request(`https://api.telegram.org/bot${this.options.botToken ?? ""}/sendMessage`, {
       method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.options.timeoutMs ?? 8_000),
-      body: JSON.stringify({ chat_id: this.options.chatId, text: formatNotification(type, payload, this.options.dashboardUrl), disable_web_page_preview: true })
+      body: JSON.stringify({ chat_id: this.options.chatId, text: formatNotification(type, payload, this.options.dashboardUrl), disable_web_page_preview: true, ...(replyMarkup === null ? {} : { reply_markup: replyMarkup }) })
     });
-    if (!response.ok) throw new NotificationDeliveryError("HTTP_ERROR", `Telegram delivery failed with HTTP ${response.status}`);
+    if (!response.ok) throw new NotificationDeliveryError("HTTP_ERROR", `Telegram delivery failed with HTTP ${response.status}`, response.status === 429 || response.status >= 500);
     const parsed = z.object({ ok: z.literal(true) }).loose().safeParse(await response.json());
     if (!parsed.success) throw new NotificationDeliveryError("MALFORMED_RESPONSE", "Telegram returned an invalid delivery response");
   }
 }
 
-export class NotificationDeliveryError extends Error { constructor(readonly code: string, message: string) { super(message); } }
+export class NotificationDeliveryError extends Error { constructor(readonly code: string, message: string, readonly retryable = false) { super(message); } }
 
 export interface NotificationStore {
   insertNotification(record: NotificationRecord): Promise<"inserted" | "duplicate">;
   updateNotification(record: NotificationRecord): Promise<void>;
+  getNotification(id: string): Promise<NotificationRecord | null>;
+  enqueueRuntimeJob(job: import("@intelligence/core").RuntimeJob): Promise<"inserted" | "duplicate">;
 }
 
 export class DurableNotificationService {
@@ -43,23 +46,26 @@ export class DurableNotificationService {
     const records: NotificationRecord[] = [];
     for (const provider of this.providers) {
       const now = new Date().toISOString();
-      const record: NotificationRecord = { id: newId(), category, payload, provider: provider.name ?? "unknown", status: "PENDING", errorCode: null, createdAt: now, attemptedAt: null, deliveredAt: null, idempotencyKey: `${idempotencyKey}:${provider.name ?? "unknown"}` };
+      const record: NotificationRecord = { id: newId(), category, payload, provider: provider.name ?? "unknown", status: "PENDING", errorCode: null, createdAt: now, attemptedAt: null, deliveredAt: null, idempotencyKey: `${idempotencyKey}:${provider.name ?? "unknown"}`, attemptCount: 0, nextAttemptAt: null, responseClass: null };
       if (await this.store.insertNotification(record) === "duplicate") continue;
       if (provider.enabled === false) {
-        const disabled = { ...record, status: "DISABLED" as const, errorCode: "NOT_CONFIGURED", attemptedAt: now };
+        const disabled = { ...record, status: "DISABLED" as const, errorCode: "NOT_CONFIGURED", attemptedAt: now, responseClass: "DISABLED" as const };
         await this.store.updateNotification(disabled); records.push(disabled); continue;
       }
       try {
         await provider.notify(category, payload);
-        const sent = { ...record, status: "SENT" as const, attemptedAt: now, deliveredAt: new Date().toISOString() };
+        const sent = { ...record, status: "SENT" as const, attemptedAt: now, deliveredAt: new Date().toISOString(), attemptCount: 1, responseClass: "SUCCESS" as const };
         await this.store.updateNotification(sent); records.push(sent);
       } catch (error) {
-        const failed = { ...record, status: "FAILED" as const, attemptedAt: now, errorCode: error instanceof NotificationDeliveryError ? error.code : "DELIVERY_FAILED" };
-        await this.store.updateNotification(failed); records.push(failed);
+        const transient = error instanceof NotificationDeliveryError && error.retryable; const nextAttemptAt = transient ? new Date(Date.parse(now) + 1_000).toISOString() : null;
+        const failed = { ...record, status: transient ? "PENDING" as const : "FAILED" as const, attemptedAt: now, errorCode: error instanceof NotificationDeliveryError ? error.code : "DELIVERY_FAILED", attemptCount: 1, nextAttemptAt, responseClass: transient ? "TRANSIENT" as const : "PERMANENT" as const };
+        await this.store.updateNotification(failed); if (nextAttemptAt !== null) await this.scheduleRetry(failed, nextAttemptAt); records.push(failed);
       }
     }
     return records;
   }
+  async retry(id: string): Promise<NotificationRecord | null> { const record = await this.store.getNotification(id); if (record === null || record.status !== "PENDING") return record; const provider = this.providers.find((item) => (item.name ?? "unknown") === record.provider); if (provider === undefined || provider.enabled === false) { const failed = { ...record, status: "FAILED" as const, responseClass: "PERMANENT" as const, errorCode: "PROVIDER_UNAVAILABLE", nextAttemptAt: null }; await this.store.updateNotification(failed); return failed; } const attempt = (record.attemptCount ?? 0) + 1; const now = new Date().toISOString(); try { await provider.notify(record.category, record.payload); const sent = { ...record, status: "SENT" as const, attemptedAt: now, deliveredAt: now, attemptCount: attempt, nextAttemptAt: null, responseClass: "SUCCESS" as const, errorCode: null }; await this.store.updateNotification(sent); return sent; } catch (error) { const transient = error instanceof NotificationDeliveryError && error.retryable && attempt < 5; const next = transient ? new Date(Date.parse(now) + Math.min(60_000, 1_000 * 2 ** (attempt - 1))).toISOString() : null; const failed = { ...record, status: transient ? "PENDING" as const : "FAILED" as const, attemptedAt: now, attemptCount: attempt, nextAttemptAt: next, responseClass: transient ? "TRANSIENT" as const : "PERMANENT" as const, errorCode: error instanceof NotificationDeliveryError ? error.code : "DELIVERY_FAILED" }; await this.store.updateNotification(failed); if (next !== null) await this.scheduleRetry(failed, next); return failed; } }
+  private async scheduleRetry(record: NotificationRecord, runAt: string): Promise<void> { await this.store.enqueueRuntimeJob({ id: newId(), type: "NOTIFICATION_RETRY", payload: { notificationId: record.id }, status: "PENDING", runAt, createdAt: new Date().toISOString(), startedAt: null, completedAt: null, attempts: 0, maxAttempts: 1, leaseOwner: null, leaseExpiresAt: null, lastError: null, idempotencyKey: `notification-retry:${record.id}:${record.attemptCount ?? 0}` }); }
 }
 
 function formatNotification(type: NotificationType, payload: JsonValue, dashboardUrl: string | undefined): string {
