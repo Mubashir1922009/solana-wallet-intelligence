@@ -83,6 +83,28 @@ describe("standard Solana live watcher", () => {
     } finally { vi.useRealTimers(); }
   });
 
+
+  it("contains live event processing failures and requests durable recovery instead of crashing", async () => {
+    const socket = new FakeSocket();
+    const failure = Object.assign(new Error("rpc timeout"), { code: "TIMEOUT" });
+    const onEventError = vi.fn();
+    const provider = new StandardSolanaLiveChainProvider({
+      wsUrl: "wss://example.test",
+      maximumSubscriptions: 1,
+      websocketFactory: () => socket as unknown as WebSocketLike,
+      onEvent: async () => { throw failure; },
+      onEventError
+    });
+    const connected = provider.connect(); socket.emit("open"); await connected; await provider.subscribe("wallet-a");
+    const request = JSON.parse(socket.sent[0] ?? "{}") as { id: number };
+    socket.emit("message", { data: JSON.stringify({ jsonrpc: "2.0", id: request.id, result: 10 }) });
+    const signature = "9".repeat(64);
+    socket.emit("message", { data: JSON.stringify({ jsonrpc: "2.0", method: "logsNotification", params: { subscription: 10, result: { context: { slot: 3 }, value: { signature, err: null, logs: [] } } } }) });
+    await vi.waitFor(() => expect(onEventError).toHaveBeenCalledOnce());
+    expect(onEventError.mock.calls[0]?.[0]).toMatchObject({ wallet: "wallet-a", signature, slot: 3n });
+    expect(provider.snapshot()).toMatchObject({ status: "CONNECTED", lastError: "event_processing:TIMEOUT" });
+    await provider.shutdown();
+  });
   it("ignores duplicate notifications and counts malformed payloads", async () => {
     const socket = new FakeSocket();
     const received = vi.fn();

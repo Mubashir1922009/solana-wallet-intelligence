@@ -51,6 +51,7 @@ export class ContinuousShadowRuntime {
     if (action.classification !== "SWAP_BUY" || action.outputMint === null || action.outputDecimals === null) return empty("OBSERVED", ["ACTION_NOT_CANDIDATE_BUY"]);
     if (!this.quoteProvider.enabled) return empty("DISABLED", ["MARKET_QUOTE_PROVIDER_DISABLED"]);
     const wallet = await this.store.getWallet(action.wallet);
+    if (wallet?.status !== "tracking") return empty("OBSERVED", ["WALLET_NOT_TRACK_ELIGIBLE"]);
     const metrics = wallet?.metrics ?? insufficientMetrics(wallet?.id ?? newId());
     const now = new Date().toISOString();
     const walletScore = scoreWallet(metrics, wallet?.lastObservedAt ?? null, now);

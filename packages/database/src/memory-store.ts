@@ -15,7 +15,7 @@ import type {
   CopyabilityEvaluation,
   CrowdingObservation
 } from "@intelligence/core";
-import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletBackfillRun, WalletReputationSnapshot, WorkerLease } from "@intelligence/core";
+import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, FollowerSourceEvent, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletBackfillRun, WalletReputationSnapshot, WorkerLease } from "@intelligence/core";
 import { newId } from "@intelligence/shared";
 
 export class InMemoryIntelligenceStore implements IntelligenceStore {
@@ -28,6 +28,7 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
   readonly copyabilityEvaluations = new Map<string, CopyabilityEvaluation>();
   readonly crowdingObservations = new Map<string, CrowdingObservation>();
   readonly backfillRuns: WalletBackfillRun[] = [];
+  readonly followerSourceEvents = new Map<string, FollowerSourceEvent>();
   readonly tokenIntelligenceSnapshots = new Map<string, TokenIntelligenceSnapshot>();
   readonly tokenRiskEvaluations: TokenRiskEvaluation[] = [];
   readonly liveSubscriptionStates = new Map<string, LiveSubscriptionState>();
@@ -126,6 +127,7 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
   }
   async listCrowdingObservations(sourceTransactionSignatures: string[]): Promise<CrowdingObservation[]> { const selected = new Set(sourceTransactionSignatures); return [...this.crowdingObservations.values()].filter((item) => selected.has(item.sourceTransactionSignature)); }
   async insertBackfillRun(run: WalletBackfillRun): Promise<void> { this.backfillRuns.push(run); }
+  async getLatestBackfillRun(wallet: string): Promise<WalletBackfillRun | null> { return this.backfillRuns.filter((item) => item.wallet === wallet).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null; }
   async insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void> { this.tokenIntelligenceSnapshots.set(snapshot.tokenMint, snapshot); }
   async getTokenIntelligenceSnapshot(mint: string): Promise<TokenIntelligenceSnapshot | null> { return this.tokenIntelligenceSnapshots.get(mint) ?? null; }
   async insertTokenRiskEvaluation(evaluation: TokenRiskEvaluation): Promise<void> { this.tokenRiskEvaluations.push(evaluation); }
@@ -148,6 +150,9 @@ export class InMemoryIntelligenceStore implements IntelligenceStore {
   async listCandidateDiscoveries(wallet: string): Promise<CandidateDiscovery[]> { return [...this.candidateDiscoveries.values()].filter((item) => item.wallet === wallet); }
   async insertForwardReturnObservation(observation: ForwardReturnObservation): Promise<"inserted" | "duplicate"> { if (this.forwardReturnObservations.has(observation.idempotencyKey)) return "duplicate"; this.forwardReturnObservations.set(observation.idempotencyKey, observation); return "inserted"; }
   async listForwardReturnObservations(wallet: string): Promise<ForwardReturnObservation[]> { return [...this.forwardReturnObservations.values()].filter((item) => item.wallet === wallet); }
+  async insertFollowerSourceEvent(event: FollowerSourceEvent): Promise<"inserted" | "duplicate"> { if ([...this.followerSourceEvents.values()].some((item) => item.sourceTransaction === event.sourceTransaction || item.idempotencyKey === event.idempotencyKey)) return "duplicate"; this.followerSourceEvents.set(event.id, event); return "inserted"; }
+  async getFollowerSourceEventByTransaction(signature: string): Promise<FollowerSourceEvent | null> { return [...this.followerSourceEvents.values()].find((item) => item.sourceTransaction === signature) ?? null; }
+  async listFollowerSourceEvents(wallet: string): Promise<FollowerSourceEvent[]> { return [...this.followerSourceEvents.values()].filter((item) => item.sourceWallet === wallet).sort((a, b) => b.sourceObservedAt.localeCompare(a.sourceObservedAt)); }
   async upsertWalletReputation(snapshot: WalletReputationSnapshot): Promise<void> { this.walletReputations.set(snapshot.wallet, snapshot); }
   async getWalletReputation(wallet: string): Promise<WalletReputationSnapshot | null> { return this.walletReputations.get(wallet) ?? null; }
   async insertDecision(decision: TradeDecision): Promise<void> { this.decisions.push(decision); }

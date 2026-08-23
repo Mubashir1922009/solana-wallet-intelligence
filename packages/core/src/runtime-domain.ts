@@ -190,10 +190,24 @@ export interface ForwardReturnObservation {
   entryMarketObservationId: string | null;
   forwardMarketObservationId: string | null;
   followerReturn: number | null;
+  sourceEventId?: string | null;
+  dataCompleteness?: number;
+  providerProvenance?: string | null;
+  estimatedNetReturn?: number | null;
   observedAt: string;
   requestedAt?: string | null;
   latenessMs?: number | null;
   idempotencyKey: string;
+}
+
+export interface FollowerSourceEvent {
+  id: string; sourceWallet: string; sourceTransaction: string; tokenMint: string;
+  sourceBlockTime: string | null; sourceObservedAt: string; decisionEvidenceAt: string;
+  entryMarketObservationId: string | null; copyabilityEvaluationId: string | null;
+  status: "ENTRY_QUOTED" | "NO_ROUTE" | "MISSING_ENTRY" | "HISTORICAL_UNUSABLE";
+  sourceEffectiveEntry: string | null; followerQuotedEntry: string | null; routeAvailable: boolean | null;
+  quoteRequestedAt: string | null; quoteReceivedAt: string | null; quoteLatencyMs: number | null; priceImpactPct: string | null;
+  dataCompleteness: number; providerProvenance: string | null; idempotencyKey: string; createdAt: string;
 }
 
 export interface WalletReputationSnapshot {
@@ -335,7 +349,7 @@ export interface TokenDiscovery {
   provenance: "EXTERNAL_HEURISTIC"; firstObservedAt: string; lastObservedAt: string; providerObservedAt: string;
 }
 
-export type CandidateEvaluationState = "DISCOVERED" | "EVALUATING" | "TRACK_ELIGIBLE" | "TRACKING" | "PAUSED" | "REJECTED" | "INSUFFICIENT_DATA";
+export type CandidateEvaluationState = "DISCOVERED" | "RESEARCH_WATCH" | "EVALUATING" | "TRACK_ELIGIBLE" | "TRACKING" | "PAUSED" | "REJECTED" | "INSUFFICIENT_DATA";
 export interface CandidateEvaluation {
   wallet: string; state: CandidateEvaluationState; sampleSize: number; independentTokenCount: number;
   provisionalScore: number | null; evidenceAtEvaluation: JsonValue; reasonCodes: string[]; evaluatedAt: string; rulesetHash: string;

@@ -36,6 +36,20 @@
       "when": 1787285512291,
       "tag": "0004_flippant_trish_tilby",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787342400000,
+      "tag": "0005_durable_follower_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787342401000,
+      "tag": "0006_finalize_follower_evidence",
+      "breakpoints": true
     }
   ]
 }

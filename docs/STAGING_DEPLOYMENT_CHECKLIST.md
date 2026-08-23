@@ -26,7 +26,7 @@ This checklist prepares an operator-managed SHADOW deployment. It does not creat
 - API: authentication, CSRF, protected SSE, schema revision, database readiness, provider health, runtime-setting mutations.
 - Worker: singular leadership, heartbeat, queue claims, restart recovery, provider fallback, no authoritative transitions during database loss.
 - Dashboard: RUNNING/PAUSED/KILLED state, database revision, lease, queue, provider status, discovery funnel, positions, and research sample size.
-- PostgreSQL: backup policy documented, retention dry-run only, no broad deletion, exact revision `runtime-schema-0004`.
+- PostgreSQL: backup policy documented, retention dry-run only, no broad deletion, exact revision `runtime-schema-0006`.
 - Redis: optional and non-authoritative.
 
 ## Rollback and evidence

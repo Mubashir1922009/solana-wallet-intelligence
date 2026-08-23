@@ -19,6 +19,7 @@
     "db:migrate": "tsx packages/database/src/migrate.ts",
     "db:check": "tsx scripts/validate-migrations.ts",
     "research:report": "tsx scripts/research-report.ts",
+    "evidence:collect": "tsx scripts/evidence-collect.ts",
     "shadow:soak": "tsx scripts/shadow-soak.ts",
     "shadow:e2e": "tsx scripts/shadow-e2e.ts",
     "resources:check": "tsx scripts/resources-check.ts",

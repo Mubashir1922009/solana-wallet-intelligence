@@ -26,6 +26,14 @@ export class TrackedWalletManager {
     await this.reconcile();
   }
 
+  async addResearchWatch(wallet: string, priority = 0): Promise<void> {
+    const now = new Date().toISOString();
+    await this.store.upsertWallet(wallet, now);
+    await this.store.setWalletStatus(wallet, "research_watch", now);
+    this.priorities.set(wallet, priority);
+    await this.reconcile();
+  }
+
   async pause(wallet: string): Promise<void> { await this.transition(wallet, "paused"); }
   async resume(wallet: string): Promise<void> { await this.transition(wallet, "tracking"); }
   async reject(wallet: string): Promise<void> { await this.transition(wallet, "rejected"); }
@@ -35,7 +43,7 @@ export class TrackedWalletManager {
     const wallets = await this.store.listWallets();
     const durableStates = new Map((await this.store.listLiveSubscriptionStates()).map((state) => [state.wallet, state]));
     const priority = (wallet: string): number => this.priorities.get(wallet) ?? durableStates.get(wallet)?.priority ?? 0;
-    const tracking = wallets.filter((wallet) => wallet.status === "tracking").sort((a, b) => priority(b.publicKey) - priority(a.publicKey) || a.discoveredAt.localeCompare(b.discoveredAt));
+    const tracking = wallets.filter((wallet) => wallet.status === "tracking" || wallet.status === "research_watch").sort((a, b) => Number(b.status === "tracking") - Number(a.status === "tracking") || priority(b.publicKey) - priority(a.publicKey) || a.discoveredAt.localeCompare(b.discoveredAt));
     const selected = new Set(tracking.slice(0, Math.max(0, this.capacity)).map((wallet) => wallet.publicKey));
     for (const wallet of [...this.active]) {
       if (!selected.has(wallet)) { await this.provider.unsubscribe(wallet); this.active.delete(wallet); }
@@ -45,11 +53,11 @@ export class TrackedWalletManager {
       const walletPriority = priority(wallet.publicKey);
       let lifecycle: LiveSubscriptionState["lifecycle"];
       let healthy = false;
-      if (wallet.status === "tracking" && selected.has(wallet.publicKey)) {
+      if ((wallet.status === "tracking" || wallet.status === "research_watch") && selected.has(wallet.publicKey)) {
         healthy = this.active.has(wallet.publicKey) || await this.provider.subscribe(wallet.publicKey);
         lifecycle = healthy ? "ACTIVE" : "QUEUED_CAPACITY";
         if (healthy) this.active.add(wallet.publicKey);
-      } else if (wallet.status === "tracking") lifecycle = "QUEUED_CAPACITY";
+      } else if (wallet.status === "tracking" || wallet.status === "research_watch") lifecycle = "QUEUED_CAPACITY";
       else if (wallet.status === "paused") lifecycle = "PAUSED";
       else if (wallet.status === "rejected") lifecycle = "REJECTED";
       else lifecycle = "INACTIVE";

@@ -6,7 +6,7 @@ PostgreSQL is the source of truth for jobs, positions, signals, notifications, s
 
 `worker_leases` has one `SHADOW_RUNTIME` row. A second worker cannot start the watcher while the current lease is healthy. Heartbeats expose slot, subscription count, queue depth, revision, and expiry. Stale ownership is reclaimable. On startup the leader schedules missing marks for every open position and claims overdue forward-return jobs at their actual execution time.
 
-Migrations are never auto-run by API replicas. Run `pnpm db:migrate` once as a distinct pre-deploy release step. API and worker startup compare the project-maintained `schema_revisions` record to `runtime-schema-0004`; a missing or wrong revision fails readiness/startup with EXPECTED and CURRENT values.
+Migrations are never auto-run by API replicas. Run `pnpm db:migrate` once as a distinct pre-deploy release step. API and worker startup compare the project-maintained `schema_revisions` record to `runtime-schema-0006`; a missing or wrong revision fails readiness/startup with EXPECTED and CURRENT values.
 
 `runtime_settings` is the authoritative watcher, shadow-entry, and kill-switch state. Control jobs audit and deliver transitions but are not replayed to infer state. Login attempt buckets are PostgreSQL-backed and atomically shared across API replicas. On restart, every open position receives idempotent mark, token-risk refresh, and exit-recalculation jobs; overdue mark payloads retain requested time, actual recovery time, and lateness.
 

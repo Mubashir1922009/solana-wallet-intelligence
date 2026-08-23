@@ -1,9 +1,9 @@
 import { and, count, desc, eq, gt, inArray, isNull, like, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import type { AIAnalysis, CandidateDiscovery, CandidateEvaluation, ChainTransaction, CopyabilityEvaluation, CrowdingObservation, ExitRecommendation, ForwardReturnObservation, IntelligenceStore, LiveSubscriptionState, MarketObservation, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PaperPosition, PositionEvent, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionContext, ShadowPositionRecord, Signal, TelegramInteraction, TokenConcentrationObservation, TokenDiscovery, TokenIntelligenceSnapshot, TokenMintObservation, TokenRiskEvaluation, TradeDecision, UserAction, Wallet, WalletAction, WalletBackfillRun, WalletMetrics, WalletReputationSnapshot, WalletStatus, WorkerLease } from "@intelligence/core";
+import type { AIAnalysis, CandidateDiscovery, CandidateEvaluation, ChainTransaction, CopyabilityEvaluation, CrowdingObservation, ExitRecommendation, FollowerSourceEvent, ForwardReturnObservation, IntelligenceStore, LiveSubscriptionState, MarketObservation, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PaperPosition, PositionEvent, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionContext, ShadowPositionRecord, Signal, TelegramInteraction, TokenConcentrationObservation, TokenDiscovery, TokenIntelligenceSnapshot, TokenMintObservation, TokenRiskEvaluation, TradeDecision, UserAction, Wallet, WalletAction, WalletBackfillRun, WalletMetrics, WalletReputationSnapshot, WalletStatus, WorkerLease } from "@intelligence/core";
 import { newId } from "@intelligence/shared";
-import { aiAnalyses, candidateDiscoveries, candidateEvaluations, chainTransactions, copyabilityEvaluations, crowdingObservations, exitRecommendations, forwardReturnObservations, liveSubscriptionState, marketObservations, notifications, operatorLoginBuckets, operatorSecurityEvents, operatorSessions, paperPositions, positionEvents, positionMarks, researchRuns, runtimeJobs, runtimeSettings, shadowPositionRecords, signals, telegramInteractions, tokenDiscoveries, tokenIntelligenceSnapshots, tokenLargestAccounts, tokenRiskEvaluations, tradeDecisions, transactionWallets, userActions, walletActions, walletBackfillRuns, walletMetrics, walletReputationSnapshots, wallets, workerLeases } from "./schema.js";
+import { aiAnalyses, candidateDiscoveries, candidateEvaluations, chainTransactions, copyabilityEvaluations, crowdingObservations, exitRecommendations, followerSourceEvents, forwardReturnObservations, liveSubscriptionState, marketObservations, notifications, operatorLoginBuckets, operatorSecurityEvents, operatorSessions, paperPositions, positionEvents, positionMarks, researchRuns, runtimeJobs, runtimeSettings, shadowPositionRecords, signals, telegramInteractions, tokenDiscoveries, tokenIntelligenceSnapshots, tokenLargestAccounts, tokenRiskEvaluations, tradeDecisions, transactionWallets, userActions, walletActions, walletBackfillRuns, walletMetrics, walletReputationSnapshots, wallets, workerLeases } from "./schema.js";
 
 type Database = ReturnType<typeof drizzle>;
 
@@ -110,6 +110,7 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
   }
   async listCrowdingObservations(sourceTransactionSignatures: string[]): Promise<CrowdingObservation[]> { if (sourceTransactionSignatures.length === 0) return []; const rows = await this.db.select().from(crowdingObservations).where(inArray(crowdingObservations.sourceTransactionSignature, sourceTransactionSignatures)); return rows.map((row) => ({ ...row, windows: row.windows as CrowdingObservation["windows"], observedInputVolumeRaw: row.observedInputVolumeRaw === null ? null : BigInt(row.observedInputVolumeRaw), confidence: row.confidence as CrowdingObservation["confidence"], status: row.status as CrowdingObservation["status"] })); }
   async insertBackfillRun(run: WalletBackfillRun): Promise<void> { await this.db.insert(walletBackfillRuns).values(run); }
+  async getLatestBackfillRun(wallet: string): Promise<WalletBackfillRun | null> { const [row] = await this.db.select().from(walletBackfillRuns).where(eq(walletBackfillRuns.wallet, wallet)).orderBy(desc(walletBackfillRuns.updatedAt)).limit(1); return row === undefined ? null : { ...row, failures: row.failures as WalletBackfillRun["failures"], completenessState: row.completenessState as WalletBackfillRun["completenessState"] }; }
   async insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void> {
     const mintObservation = serializeBigInts(snapshot.mint) as TokenMintObservation;
     const concentration = serializeBigInts(snapshot.concentration) as TokenConcentrationObservation;
@@ -208,6 +209,9 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
     const rows = await this.db.select().from(forwardReturnObservations).where(eq(forwardReturnObservations.wallet, wallet)).orderBy(desc(forwardReturnObservations.observedAt));
     return rows.map((row) => ({ ...row, observedAt: isoTimestamp(row.observedAt), requestedAt: nullableIsoTimestamp(row.requestedAt), status: row.status as ForwardReturnObservation["status"] }));
   }
+  async insertFollowerSourceEvent(event: FollowerSourceEvent): Promise<"inserted" | "duplicate"> { const rows = await this.db.insert(followerSourceEvents).values(event).onConflictDoNothing({ target: followerSourceEvents.idempotencyKey }).returning({ id: followerSourceEvents.id }); return rows.length === 0 ? "duplicate" : "inserted"; }
+  async getFollowerSourceEventByTransaction(signature: string): Promise<FollowerSourceEvent | null> { const [row] = await this.db.select().from(followerSourceEvents).where(eq(followerSourceEvents.sourceTransaction, signature)).limit(1); return row ?? null; }
+  async listFollowerSourceEvents(wallet: string): Promise<FollowerSourceEvent[]> { return this.db.select().from(followerSourceEvents).where(eq(followerSourceEvents.sourceWallet, wallet)).orderBy(desc(followerSourceEvents.sourceObservedAt)); }
   async upsertWalletReputation(snapshot: WalletReputationSnapshot): Promise<void> {
     await this.db.insert(walletReputationSnapshots).values({ id: snapshot.id, wallet: snapshot.wallet, snapshot, calculatedAt: snapshot.calculatedAt }).onConflictDoUpdate({ target: walletReputationSnapshots.wallet, set: { id: snapshot.id, snapshot, calculatedAt: snapshot.calculatedAt } });
   }
@@ -295,7 +299,7 @@ export class PostgresIntelligenceStore implements IntelligenceStore {
   async listResearchRuns(limit: number): Promise<ResearchRun[]> { return (await this.db.select().from(researchRuns).orderBy(desc(researchRuns.startedAt)).limit(limit)).map((row) => ({ ...row, kind: row.kind as ResearchRun["kind"], status: row.status as ResearchRun["status"] })); }
 }
 
-export const EXPECTED_SCHEMA_REVISION = "runtime-schema-0004";
+export const EXPECTED_SCHEMA_REVISION = "runtime-schema-0006";
 export interface MigrationReadiness { expected: string; current: string | null; ready: boolean }
 export function evaluateMigrationReadiness(current: string | null, expected = EXPECTED_SCHEMA_REVISION): MigrationReadiness { return { expected, current, ready: current === expected }; }
 

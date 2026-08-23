@@ -76,7 +76,7 @@ async function collectEvidence(): Promise<ReadinessEvidence> {
   for (const file of productionFiles) if (prohibited.test(await readFile(file, "utf8"))) prohibitedProductionSymbols += 1;
   const configSource = await readFile(join(process.cwd(), "packages", "config", "src", "index.ts"), "utf8");
   return {
-    resources: inspectResources(process.env), migrationCount: journal.entries?.length ?? 0, expectedMigrationCount: 5, expectedSchemaRevision: "runtime-schema-0004",
+    resources: inspectResources(process.env), migrationCount: journal.entries?.length ?? 0, expectedMigrationCount: 7, expectedSchemaRevision: "runtime-schema-0006",
     postgresArtifact: postgres?.status === "PASS" && Array.isArray(postgres.failures) && postgres.failures.length === 0,
     heliusArtifact: heliusTotalsPassed(helius) && nestedBoolean(helius, "websocket", "ok") === true,
     providerFallbackArtifact: fallbackChecksPassed(fallback),

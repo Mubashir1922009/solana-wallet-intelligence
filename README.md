@@ -77,3 +77,23 @@ Helius webhook authentication is optional for local development, but when `HELIU
 See [ARCHITECTURE.md](./ARCHITECTURE.md), [SECURITY.md](./SECURITY.md), [COPYABILITY.md](./docs/COPYABILITY.md), and the documents under `docs/` before extending provider or execution behavior.
 
 Operational commands: `pnpm staging:verify --preflight`, `pnpm shadow:e2e -- --mode=recent-token-research`, `pnpm shadow:soak -- --duration=10m --full --max-wallets=5 --max-recent-tokens=3 --provider-budget=20`, `pnpm research:report`, `pnpm performance:validate`, `pnpm maintenance:prune-raw` (dry run), and `pnpm secrets:generate <session|telegram-webhook|password-hash>`.
+
+## Prospective follower-evidence collection
+
+Candidate wallets may enter `RESEARCH_WATCH` for observation without becoming trade eligible. This state exists only to collect prospective follower evidence; the normal candidate thresholds and SHADOW decision gates remain unchanged.
+
+After normal validation and database migration, run a bounded evidence collector from PowerShell:
+
+```powershell
+corepack pnpm@10.15.1 evidence:collect -- --duration=6h --max-wallets=10
+```
+
+The collector requires `DATABASE_URL`, `STAGING_DATABASE_ACK=wallet-intelligence-shadow`, and `HELIUS_API_KEY` in the process environment. It forces `EXECUTION_MODE=SHADOW`, uses the configured quote-only provider, persists follower-entry evidence plus 1m/5m/15m/1h outcome jobs, and writes a research report when it stops. Historical/backfilled BUY actions are never assigned fabricated decision-time quotes.
+
+Inspect progress with:
+
+```powershell
+corepack pnpm@10.15.1 research:report
+```
+
+The report distinguishes prospective follower-evidence sample size from outcomes attached to deterministic decisions.

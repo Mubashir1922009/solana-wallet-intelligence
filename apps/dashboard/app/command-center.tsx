@@ -32,7 +32,20 @@ export function CommandCenter(): React.ReactElement {
   const [authState, setAuthState] = useState<"checking" | "authenticated" | "signed_out">("checking");
   const [password, setPassword] = useState("");
   const [loginMessage, setLoginMessage] = useState<string | null>(null);
-  const [research, setResearch] = useState<{ sampleSize: number | null; candidates: Array<{ wallet: string; state: string; sampleSize: number; provisionalScore: number | null }> } | null>(null);
+  const [research, setResearch] = useState<{
+    sampleSize: number | null;
+    deterministicDecisionOutcomeSampleSize: number | null;
+    followerEvidenceSampleSize: number | null;
+    followerSourceEventCount: number | null;
+    pendingOutcomes: number | null;
+    candidates: Array<{ wallet: string; state: string; sampleSize: number; provisionalScore: number | null }>;
+    candidateProgress: Array<{
+      wallet: string; state: string; validFollowerSamples: number; requiredFollowerSamples: number;
+      independentTokens: number; requiredIndependentTokens: number; score: number | null; crowding: number | null;
+      historyCompleteness: string; nextPendingOutcome: string | null; latestSourceObservation: string | null;
+      noRoute: number; missing: number; pendingOutcomes: number;
+    }>;
+  } | null>(null);
   const [security, setSecurity] = useState<{ activeSessions: number; events: Array<{ id: string; type: string; occurredAt: string }> } | null>(null);
   const [e2e, setE2e] = useState<{ status: string; completedAt?: string | null; decisions?: Record<string, number> | null; funnel?: Record<string, number | null>; dropReasons?: Record<string, number> | null } | null>(null);
   const [soak, setSoak] = useState<{ status: string; completedAt?: string | null; durationMs?: number | null; storeMode?: string | null } | null>(null);
@@ -112,7 +125,7 @@ export function CommandCenter(): React.ReactElement {
       <article className="panel"><PanelHeader title="Durable alerts" meta={`${notifications.length} deliveries`} />{notifications.slice(0, 8).map((item) => <div className="health-row" key={item.id}><span>{item.category.replaceAll("_", " ")}</span><b className={item.status === "FAILED" ? "negative" : "positive"}>{item.status}</b><small>{item.errorCode ?? new Date(item.createdAt).toLocaleTimeString()}</small></div>)}{notifications.length === 0 && <Empty text="No notification delivery has been recorded." />}</article>
     </section>
     <section className="grid equal">
-      <article className="panel"><PanelHeader title="Research calibration" meta={`outcome N=${research?.sampleSize ?? "Unknown"} / ${research?.candidates.length ?? 0} candidates`} />{(research?.candidates ?? []).slice(0, 8).map((item) => <div className="health-row" key={item.wallet}><span>{compact(item.wallet)}</span><b>{item.state}</b><small>n={item.sampleSize} / {item.provisionalScore === null ? "Unknown" : item.provisionalScore.toFixed(1)}</small></div>)}{research?.candidates.length === 0 && <Empty text="No evidence-complete candidate evaluation yet."/>}</article>
+      <article className="panel"><PanelHeader title="Research calibration" meta={`follower N=${research?.followerEvidenceSampleSize ?? "Unknown"} / decision N=${research?.deterministicDecisionOutcomeSampleSize ?? research?.sampleSize ?? "Unknown"}`} /><div className="telemetry"><span>Source events<b>{research?.followerSourceEventCount ?? "Unknown"}</b></span><span>Pending outcomes<b>{research?.pendingOutcomes ?? "Unknown"}</b></span><span>Candidates<b>{research?.candidateProgress.length ?? research?.candidates.length ?? 0}</b></span></div>{(research?.candidateProgress ?? []).slice(0, 8).map((item) => <div className="health-row" key={item.wallet}><span>{compact(item.wallet)}</span><b>{item.state}</b><small>samples {item.validFollowerSamples}/{item.requiredFollowerSamples} / tokens {item.independentTokens}/{item.requiredIndependentTokens} / score {item.score === null ? "Unknown" : item.score.toFixed(1)}</small></div>)}{research?.candidateProgress.length === 0 && <Empty text="No prospective follower evidence has accumulated yet."/>}</article>
       <article className="panel"><PanelHeader title="Operator security" meta={`${security?.activeSessions ?? 0} active session`} />{(security?.events ?? []).slice(0, 8).map((item) => <div className="health-row" key={item.id}><span>{item.type.replaceAll("_", " ")}</span><b>audited</b><small>{new Date(item.occurredAt).toLocaleTimeString()}</small></div>)}{security?.events.length === 0 && <Empty text="No recent security events."/>}</article>
     </section>
 

@@ -15,10 +15,10 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { EntryMarketSnapshot, TokenRiskSnapshot, WalletScore } from "@intelligence/core";
-import type { CandidateEvaluation, OperatorSecurityEvent, ResearchRun, RuntimeJob, ShadowPositionContext, TokenConcentrationObservation, TokenMintObservation, TokenRiskComponent, WalletReputationSnapshot } from "@intelligence/core";
+import type { CandidateEvaluation, FollowerSourceEvent, OperatorSecurityEvent, ResearchRun, RuntimeJob, ShadowPositionContext, TokenConcentrationObservation, TokenMintObservation, TokenRiskComponent, WalletReputationSnapshot } from "@intelligence/core";
 import type { JsonValue } from "@intelligence/shared";
 
-export const walletStatus = pgEnum("wallet_status", ["candidate", "tracking", "rejected", "paused", "insufficient_data"]);
+export const walletStatus = pgEnum("wallet_status", ["candidate", "research_watch", "tracking", "rejected", "paused", "insufficient_data"]);
 export const decisionKind = pgEnum("decision_kind", ["BUY", "REJECT", "OBSERVE"]);
 export const positionState = pgEnum("position_state", ["open", "manual_control", "sell_recommended", "closed"]);
 
@@ -246,6 +246,10 @@ export const walletBackfillRuns = pgTable("wallet_backfill_runs", {
   requestedLimit: integer("requested_limit").notNull(), signaturesFetched: integer("signatures_fetched").notNull(), transactionsFetched: integer("transactions_fetched").notNull(),
   actionsPersisted: integer("actions_persisted").notNull(), duplicatesIgnored: integer("duplicates_ignored").notNull(), failures: jsonb("failures").notNull(),
   complete: boolean("complete").notNull(), startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(), completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }).notNull()
+  , requestBefore: text("request_before"), continuationCursor: text("continuation_cursor"), lastProcessedSignature: text("last_processed_signature"),
+  lastProcessedSlot: bigint("last_processed_slot", { mode: "bigint" }), lastProcessedAt: timestamp("last_processed_at", { withTimezone: true, mode: "string" }),
+  completenessState: text("completeness_state").notNull().default("UNKNOWN"), attemptCount: integer("attempt_count").notNull().default(1),
+  lastErrorClass: text("last_error_class"), updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull().defaultNow()
 }, (table) => [index("wallet_backfill_wallet_time_idx").on(table.wallet, table.startedAt)]);
 
 export const tokenIntelligenceSnapshots = pgTable("token_intelligence_snapshots", {
@@ -300,8 +304,17 @@ export const candidateDiscoveries = pgTable("candidate_discoveries", {
 export const forwardReturnObservations = pgTable("forward_return_observations", {
   id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), transactionSignature: text("transaction_signature").notNull(), tokenMint: text("token_mint").notNull(), windowMs: integer("window_ms").notNull(),
   status: text("status").notNull(), entryMarketObservationId: uuid("entry_market_observation_id"), forwardMarketObservationId: uuid("forward_market_observation_id"), followerReturn: doublePrecision("follower_return"),
+  sourceEventId: uuid("source_event_id"), dataCompleteness: doublePrecision("data_completeness").notNull().default(0), providerProvenance: text("provider_provenance"), estimatedNetReturn: doublePrecision("estimated_net_return"),
   observedAt: timestamp("observed_at", { withTimezone: true, mode: "string" }).notNull(), requestedAt: timestamp("requested_at", { withTimezone: true, mode: "string" }), latenessMs: integer("lateness_ms"), idempotencyKey: text("idempotency_key").notNull()
 }, (table) => [uniqueIndex("forward_return_idempotency_uidx").on(table.idempotencyKey), index("forward_return_wallet_time_idx").on(table.wallet, table.observedAt)]);
+
+export const followerSourceEvents = pgTable("follower_source_events", {
+  id: uuid("id").primaryKey(), sourceWallet: text("source_wallet").notNull(), sourceTransaction: text("source_transaction").notNull(), tokenMint: text("token_mint").notNull(),
+  sourceBlockTime: timestamp("source_block_time", { withTimezone: true, mode: "string" }), sourceObservedAt: timestamp("source_observed_at", { withTimezone: true, mode: "string" }).notNull(), decisionEvidenceAt: timestamp("decision_evidence_at", { withTimezone: true, mode: "string" }).notNull(),
+  entryMarketObservationId: uuid("entry_market_observation_id"), copyabilityEvaluationId: uuid("copyability_evaluation_id"), status: text("status").$type<FollowerSourceEvent["status"]>().notNull(),
+  sourceEffectiveEntry: text("source_effective_entry"), followerQuotedEntry: text("follower_quoted_entry"), routeAvailable: boolean("route_available"), quoteRequestedAt: timestamp("quote_requested_at", { withTimezone: true, mode: "string" }), quoteReceivedAt: timestamp("quote_received_at", { withTimezone: true, mode: "string" }),
+  quoteLatencyMs: integer("quote_latency_ms"), priceImpactPct: text("price_impact_pct"), dataCompleteness: doublePrecision("data_completeness").notNull(), providerProvenance: text("provider_provenance"), idempotencyKey: text("idempotency_key").notNull(), createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [uniqueIndex("follower_source_tx_uidx").on(table.sourceTransaction), uniqueIndex("follower_source_idempotency_uidx").on(table.idempotencyKey), index("follower_source_wallet_time_idx").on(table.sourceWallet, table.sourceObservedAt)]);
 
 export const walletReputationSnapshots = pgTable("wallet_reputation_snapshots", {
   id: uuid("id").primaryKey(), wallet: text("wallet").notNull(), snapshot: jsonb("snapshot").$type<WalletReputationSnapshot>().notNull(), calculatedAt: timestamp("calculated_at", { withTimezone: true, mode: "string" }).notNull()

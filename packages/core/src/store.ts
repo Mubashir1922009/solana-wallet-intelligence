@@ -15,7 +15,7 @@ import type { WalletBackfillRun } from "./domain.js";
 import type { CopyabilityEvaluation } from "./copyability.js";
 import type { CrowdingObservation } from "./crowding.js";
 import type { MarketObservation } from "./market.js";
-import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletReputationSnapshot, WorkerLease } from "./runtime-domain.js";
+import type { CandidateDiscovery, CandidateEvaluation, ExitRecommendation, FollowerSourceEvent, ForwardReturnObservation, LiveSubscriptionState, NotificationRecord, OperatorLoginBucket, OperatorSecurityEvent, OperatorSession, PositionMark, ResearchRun, RuntimeJob, RuntimeSettings, ShadowPositionRecord, TelegramInteraction, TokenDiscovery, TokenIntelligenceSnapshot, TokenRiskEvaluation, WalletReputationSnapshot, WorkerLease } from "./runtime-domain.js";
 
 export interface IntelligenceStore {
   upsertWallet(publicKey: string, now: string): Promise<Wallet>;
@@ -40,6 +40,7 @@ export interface IntelligenceStore {
   insertCrowdingObservation(observation: CrowdingObservation): Promise<"inserted" | "duplicate">;
   listCrowdingObservations(sourceTransactionSignatures: string[]): Promise<CrowdingObservation[]>;
   insertBackfillRun(run: WalletBackfillRun): Promise<void>;
+  getLatestBackfillRun(wallet: string): Promise<WalletBackfillRun | null>;
   insertTokenIntelligenceSnapshot(snapshot: TokenIntelligenceSnapshot): Promise<void>;
   getTokenIntelligenceSnapshot(mint: string): Promise<TokenIntelligenceSnapshot | null>;
   insertTokenRiskEvaluation(evaluation: TokenRiskEvaluation): Promise<void>;
@@ -62,6 +63,9 @@ export interface IntelligenceStore {
   listCandidateDiscoveries(wallet: string): Promise<CandidateDiscovery[]>;
   insertForwardReturnObservation(observation: ForwardReturnObservation): Promise<"inserted" | "duplicate">;
   listForwardReturnObservations(wallet: string): Promise<ForwardReturnObservation[]>;
+  insertFollowerSourceEvent(event: FollowerSourceEvent): Promise<"inserted" | "duplicate">;
+  getFollowerSourceEventByTransaction(signature: string): Promise<FollowerSourceEvent | null>;
+  listFollowerSourceEvents(wallet: string): Promise<FollowerSourceEvent[]>;
   upsertWalletReputation(snapshot: WalletReputationSnapshot): Promise<void>;
   getWalletReputation(wallet: string): Promise<WalletReputationSnapshot | null>;
   insertDecision(decision: TradeDecision): Promise<void>;

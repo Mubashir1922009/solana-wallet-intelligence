@@ -12,13 +12,15 @@ export interface BackfillHistoryResult {
     transactionsMissing: number;
     failures: Array<{ signature: string; code: string }>;
     complete: boolean;
+    completenessState?: WalletBackfillRun["completenessState"];
+    continuationCursor?: string | null;
   };
 }
 
 export interface WalletHistorySource {
   readonly name: string;
   readonly historyMode: string;
-  fetchWalletHistory(request: { address: string; limit: number; concurrency: number; commitment: "confirmed" | "finalized" }): Promise<BackfillHistoryResult>;
+  fetchWalletHistory(request: { address: string; limit: number; before?: string; concurrency: number; commitment: "confirmed" | "finalized" }): Promise<BackfillHistoryResult>;
 }
 
 export interface WalletBackfillOptions {
@@ -37,7 +39,17 @@ export class WalletHistoryBackfillService {
     const startedAt = new Date().toISOString();
     const limit = Math.min(options.maximumTransactions, Math.max(1, requestedLimit));
     const wallet = await this.store.upsertWallet(walletPublicKey, startedAt);
-    const history = await this.provider.fetchWalletHistory({ address: walletPublicKey, limit, concurrency: Math.min(8, Math.max(1, options.concurrency)), commitment: options.commitment ?? "confirmed" });
+    const prior = await this.store.getLatestBackfillRun(walletPublicKey);
+    const requestBefore = prior !== null && !prior.complete ? prior.continuationCursor : null;
+    const attemptCount = prior !== null && !prior.complete ? prior.attemptCount + 1 : 1;
+    let history: BackfillHistoryResult;
+    try {
+      history = await this.provider.fetchWalletHistory({ address: walletPublicKey, limit, ...(requestBefore === null ? {} : { before: requestBefore }), concurrency: Math.min(8, Math.max(1, options.concurrency)), commitment: options.commitment ?? "confirmed" });
+    } catch (error) {
+      const failedAt = new Date().toISOString();
+      await this.store.insertBackfillRun({ id: newId(), wallet: walletPublicKey, provider: this.provider.name, historyMode: this.provider.historyMode, requestedLimit: limit, signaturesFetched: 0, transactionsFetched: 0, actionsPersisted: 0, duplicatesIgnored: 0, failures: [], complete: false, requestBefore, continuationCursor: requestBefore, lastProcessedSignature: prior?.lastProcessedSignature ?? null, lastProcessedSlot: prior?.lastProcessedSlot ?? null, lastProcessedAt: prior?.lastProcessedAt ?? null, completenessState: "PARTIAL_PROVIDER_FAILURE", attemptCount, lastErrorClass: error instanceof Error ? error.name : "UNKNOWN", updatedAt: failedAt, startedAt, completedAt: failedAt });
+      throw error;
+    }
     const actions: WalletAction[] = [];
     let actionsPersisted = 0;
     let duplicatesIgnored = 0;
@@ -69,6 +81,7 @@ export class WalletHistoryBackfillService {
       else duplicatesIgnored += 1;
     }
     const completedAt = new Date().toISOString();
+    const lastProcessed = history.transactions.at(-1) ?? null;
     const persistedActions = await this.store.listWalletActions(walletPublicKey, limit);
     const observedTrades = persistedActions.filter((action) => action.classification === "SWAP_BUY" || action.classification === "SWAP_SELL").length;
     const metrics: WalletMetrics = {
@@ -82,7 +95,13 @@ export class WalletHistoryBackfillService {
     const run: WalletBackfillRun = {
       id: newId(), wallet: walletPublicKey, provider: this.provider.name, historyMode: history.diagnostics.mode,
       requestedLimit: limit, signaturesFetched: history.diagnostics.signaturesFetched, transactionsFetched: history.diagnostics.transactionsFetched,
-      actionsPersisted, duplicatesIgnored, failures: history.diagnostics.failures, complete: history.diagnostics.complete, startedAt, completedAt
+      actionsPersisted, duplicatesIgnored, failures: history.diagnostics.failures, complete: history.diagnostics.complete,
+      requestBefore, continuationCursor: history.diagnostics.continuationCursor ?? null,
+      lastProcessedSignature: lastProcessed?.signature ?? prior?.lastProcessedSignature ?? null,
+      lastProcessedSlot: lastProcessed?.slot ?? prior?.lastProcessedSlot ?? null,
+      lastProcessedAt: lastProcessed?.blockTime ?? prior?.lastProcessedAt ?? null,
+      completenessState: history.diagnostics.completenessState ?? (history.diagnostics.complete ? "COMPLETE_WITHIN_REQUESTED_WINDOW" : "UNKNOWN"),
+      attemptCount, lastErrorClass: history.diagnostics.failures.at(-1)?.code ?? null, updatedAt: completedAt, startedAt, completedAt
     };
     await this.store.insertBackfillRun(run);
     return { run, actions, metrics };

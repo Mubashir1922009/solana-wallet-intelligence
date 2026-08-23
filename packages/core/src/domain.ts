@@ -7,7 +7,7 @@ export type TransactionSignature = string;
 export type DecimalString = string;
 
 export type DataConfidence = number | null;
-export type WalletStatus = "candidate" | "tracking" | "rejected" | "paused" | "insufficient_data";
+export type WalletStatus = "candidate" | "research_watch" | "tracking" | "rejected" | "paused" | "insufficient_data";
 export type WalletActionType = "swap_buy" | "swap_sell" | "transfer_in" | "transfer_out" | "unknown";
 export type DecisionKind = "BUY" | "REJECT" | "OBSERVE";
 export type ExecutionMode = "PAPER" | "SHADOW" | "LIVE";
@@ -306,6 +306,15 @@ export interface WalletBackfillRun {
   duplicatesIgnored: number;
   failures: Array<{ signature: string; code: string }>;
   complete: boolean;
+  requestBefore: string | null;
+  continuationCursor: string | null;
+  lastProcessedSignature: string | null;
+  lastProcessedSlot: bigint | null;
+  lastProcessedAt: string | null;
+  completenessState: "COMPLETE_WITHIN_REQUESTED_WINDOW" | "PARTIAL_RATE_LIMIT" | "PARTIAL_PROVIDER_FAILURE" | "PARTIAL_PAGINATION_LIMIT" | "UNKNOWN";
+  attemptCount: number;
+  lastErrorClass: string | null;
+  updatedAt: string;
   startedAt: string;
   completedAt: string;
 }

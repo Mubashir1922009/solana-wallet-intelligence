@@ -3,6 +3,7 @@ import { InMemoryIntelligenceStore } from "@intelligence/database";
 import { TrackedWalletManager } from "./watchlist.js";
 
 describe("tracked wallet manager", () => {
+  it("subscribes a durable research watch without making it track eligible", async () => { const store = new InMemoryIntelligenceStore(); const provider = { name: "test-live", subscribe: vi.fn(async () => true), unsubscribe: vi.fn(async () => undefined) }; const manager = new TrackedWalletManager(store, provider, 10); await manager.addResearchWatch("candidate"); expect((await store.getWallet("candidate"))?.status).toBe("research_watch"); expect(await store.getLiveSubscriptionState("candidate")).toMatchObject({ lifecycle: "ACTIVE" }); });
   it("persists explicit active and capacity-queued lifecycle states", async () => {
     const store = new InMemoryIntelligenceStore();
     const provider = { name: "test-live", subscribe: vi.fn(async () => true), unsubscribe: vi.fn(async () => undefined) };

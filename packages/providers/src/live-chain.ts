@@ -83,6 +83,7 @@ export interface StandardSolanaLiveOptions {
   livenessTimeoutMs?: number;
   websocketFactory?: (url: string) => WebSocketLike;
   onEvent: (event: LiveChainEvent) => Promise<void> | void;
+  onEventError?: (event: LiveChainEvent, error: unknown) => Promise<void> | void;
   onReconnect?: (wallets: string[]) => Promise<void> | void;
   onStatus?: (snapshot: LiveConnectionSnapshot) => void;
   random?: () => number;
@@ -133,7 +134,7 @@ export class StandardSolanaLiveChainProvider implements LiveChainEventProvider {
         this.pending.clear();
         for (const wallet of this.desired) this.sendSubscribe(wallet);
         this.emitStatus();
-        if (reconnecting) void this.options.onReconnect?.([...this.desired]);
+        if (reconnecting) void Promise.resolve(this.options.onReconnect?.([...this.desired])).catch(() => { this.lastError = "reconnect_recovery_failed"; this.emitStatus(); });
         if (!settled) { settled = true; resolve(); }
       });
       socket.addEventListener("message", (event) => { void this.handleMessage(event.data); });
@@ -218,7 +219,17 @@ export class StandardSolanaLiveChainProvider implements LiveChainEventProvider {
       const receivedAt = new Date().toISOString();
       this.lastEventAt = receivedAt;
       this.lastObservedSlot = BigInt(notification.data.params.result.context.slot);
-      await this.options.onEvent({ wallet, signature: value.signature, slot: this.lastObservedSlot, succeeded: value.err === null, receivedAt, provider: this.name });
+      const event: LiveChainEvent = { wallet, signature: value.signature, slot: this.lastObservedSlot, succeeded: value.err === null, receivedAt, provider: this.name };
+      try {
+        await this.options.onEvent(event);
+      } catch (error) {
+        // A transient HTTP/RPC failure while hydrating a WebSocket notification must
+        // never terminate the long-running watcher. The worker can durably recover
+        // the missed transaction from the last successful signature boundary.
+        this.lastError = `event_processing:${errorCode(error)}`;
+        try { await this.options.onEventError?.(event, error); }
+        catch { this.lastError = `${this.lastError}:recovery_enqueue_failed`; }
+      }
       this.emitStatus();
       return;
     }
@@ -277,4 +288,10 @@ export class HeliusWebhookLiveChainProvider implements LiveChainEventProvider {
   async ingest(event: LiveChainEvent): Promise<void> { if (!this.active || !this.wallets.has(event.wallet)) return; this.lastEventAt = event.receivedAt; this.lastObservedSlot = event.slot; await this.onEvent(event); }
   async shutdown(): Promise<void> { this.active = false; }
   snapshot(): LiveConnectionSnapshot { return { mode: this.mode, provider: this.name, status: this.active ? "CONNECTED" : "SHUTDOWN", activeSubscriptions: this.wallets.size, desiredSubscriptions: this.wallets.size, lastEventAt: this.lastEventAt, lastObservedSlot: this.lastObservedSlot, reconnectCount: 0, malformedMessages: 0, duplicateNotifications: 0, lastError: null }; }
+}
+
+function errorCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error && typeof (error as { code?: unknown }).code === "string") return (error as { code: string }).code;
+  if (error instanceof Error && error.name.length > 0) return error.name;
+  return "UNKNOWN";
 }
