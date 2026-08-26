@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: signal-deck-worker
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile.worker
+    plan: free
+    healthCheckPath: /livez
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: EXECUTION_MODE
+        value: SHADOW
+      - key: HOST
+        value: 0.0.0.0
+      - key: WORKER_HEALTH_PORT
+        value: "10000"
+      - key: MAX_LIVE_SUBSCRIPTIONS
+        value: "25"
+      - key: TOKEN_DISCOVERY_INTERVAL_MS
+        value: "120000"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=400
+      - key: DATABASE_URL
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: OPERATOR_PASSWORD_HASH
+        sync: false
+      - key: CORS_ALLOWED_ORIGIN
+        value: https://signal-deck-worker.onrender.com
