@@ -1,0 +1,48 @@
+name: deployment validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack pnpm@10.15.1 install --frozen-lockfile
+      - run: corepack pnpm@10.15.1 typecheck
+      - run: corepack pnpm@10.15.1 lint
+      - run: corepack pnpm@10.15.1 test
+      - run: corepack pnpm@10.15.1 build
+      - run: corepack pnpm@10.15.1 db:check
+      - run: corepack pnpm@10.15.1 deployment:check
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.api
+          push: false
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.worker
+          push: false
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.dashboard
+          push: false

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { z } from "zod";
 import { parseConfig, safeConfigSummary } from "@intelligence/config";
 import { createAuthoritativeRuntimeDatabase } from "@intelligence/database";
-import { calculateWalletReputation, ContinuousShadowRuntime, DurableRuntimeWorker, evaluateCandidate, evaluateTokenRisk, FollowerOutcomeAccumulator, ForwardReturnResearchService, LiveIngestionCoordinator, newRuntimeJob, ObservedDatasetCandidateDiscoveryEngine, OptionalAIExitAnalyzer, PaperPositionService, PositionMonitor, ShadowRuntimeControl, SourceWalletPositionMonitor, TrackedWalletManager, WalletHistoryBackfillService, recommendExit, type RuntimeJobHandlers } from "@intelligence/core";
+import { calculateWalletReputation, ContinuousShadowRuntime, deriveWalletMetricsFromReputation, DurableRuntimeWorker, evaluateCandidate, evaluateTokenRisk, FollowerOutcomeAccumulator, ForwardReturnResearchService, LiveIngestionCoordinator, newRuntimeJob, ObservedDatasetCandidateDiscoveryEngine, OptionalAIExitAnalyzer, PaperPositionService, PositionMonitor, ShadowRuntimeControl, SourceWalletPositionMonitor, TrackedWalletManager, WalletHistoryBackfillService, recommendExit, type RuntimeJobHandlers } from "@intelligence/core";
 import { ConsoleNotificationProvider, DurableNotificationService, FallbackChainDataProvider, HeliusChainDataProvider, JupiterRecentTokenProvider, JupiterSwapV2MarketDataProvider, OpenRouterAIProvider, ProviderBudgetManager, ShardedSolanaLiveChainProvider, StandardSolanaRpcProvider, StandardSolanaTokenIntelligenceProvider, TelegramNotificationProvider, TelegramShadowController } from "@intelligence/providers";
 
 try { process.loadEnvFile?.(".env"); } catch { /* Process manager may supply the environment. */ }
@@ -82,7 +82,10 @@ handlers.REPUTATION_RECALCULATION = async (job) => {
   ]);
   const sourceTransactions = new Set(sourceEvents.filter((item) => item.status !== "HISTORICAL_UNUSABLE").map((item) => item.sourceTransaction));
   const crowding = await database.store.listCrowdingObservations([...sourceTransactions]);
-  await database.store.upsertWalletReputation(calculateWalletReputation(wallet, forwardReturns, recentCopyability.filter((item) => sourceTransactions.has(item.sourceTransactionSignature)), crowding, new Date().toISOString()));
+  const reputation = calculateWalletReputation(wallet, forwardReturns, recentCopyability.filter((item) => sourceTransactions.has(item.sourceTransactionSignature)), crowding, new Date().toISOString());
+  await database.store.upsertWalletReputation(reputation);
+  const walletRecord = await database.store.getWallet(wallet);
+  if (walletRecord !== null) await database.store.upsertWalletMetrics(deriveWalletMetricsFromReputation(walletRecord.id, reputation, reputation.calculatedAt));
   const now = new Date().toISOString();
   await database.store.enqueueRuntimeJob(newRuntimeJob("CANDIDATE_EVALUATION", { wallet }, now, `candidate-evaluation:reputation:${wallet}:${now}`, 5));
 };

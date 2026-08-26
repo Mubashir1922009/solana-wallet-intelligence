@@ -2,6 +2,7 @@ import { newId, stableHash } from "@intelligence/shared";
 import type { JsonValue } from "@intelligence/shared";
 import { evaluateCopyability, type CopyabilityEvaluation } from "./copyability.js";
 import type { CrowdingObservation } from "./crowding.js";
+import type { WalletMetrics } from "./domain.js";
 import type { IntelligenceStore } from "./store.js";
 import type { MarketObservation } from "./market.js";
 import type { MarketQuoteRequest, MarketQuoteResult } from "./market.js";
@@ -39,6 +40,8 @@ export class ObservedDatasetCandidateDiscoveryEngine implements CandidateDiscove
 }
 
 export interface ForwardResearchStore extends CandidateDiscoveryStore {
+  getWallet(publicKey: string): Promise<{ id: string } | null>;
+  upsertWalletMetrics(metrics: WalletMetrics): Promise<void>;
   insertMarketObservation(observation: MarketObservation): Promise<void>;
   getCopyabilityBySourceTransaction(signature: string): Promise<CopyabilityEvaluation | null>;
   listRecentCopyability(limit: number): Promise<CopyabilityEvaluation[]>;
@@ -208,6 +211,8 @@ export class ForwardReturnResearchService {
     const crowding = await this.store.listCrowdingObservations([...sourceTransactions]);
     const reputation = calculateWalletReputation(wallet, forward, copyability, crowding, observedAt);
     await this.store.upsertWalletReputation(reputation);
+    const walletRecord = await this.store.getWallet(wallet);
+    if (walletRecord !== null) await this.store.upsertWalletMetrics(deriveWalletMetricsFromReputation(walletRecord.id, reputation, observedAt));
   }
 }
 
@@ -233,6 +238,31 @@ export function evaluateForwardReturn(wallet: string, transactionSignature: stri
 
 export interface ReputationRules { minimumSample: number; returnCap: number; followerReturnWeight: number; copyabilityWeight: number; crowdingWeight: number }
 export const PROVISIONAL_REPUTATION_RULES: ReputationRules = { minimumSample: 10, returnCap: 1, followerReturnWeight: 0.55, copyabilityWeight: 0.3, crowdingWeight: 0.15 };
+
+export function deriveWalletMetricsFromReputation(walletId: string, reputation: WalletReputationSnapshot, calculatedAt: string): WalletMetrics {
+  const distribution = reputation.followerReturnDistribution ?? [];
+  const copyabilitySamples = reputation.copyableOpportunities + reputation.uncopyableOpportunities;
+  const trimmedMean = reputation.trimmedMeanFollowerReturn;
+  return {
+    walletId,
+    sampleSize: reputation.sampleSize,
+    observedTrades: reputation.observedCandidateBuys,
+    realizedWins: distribution.filter((value) => value > 0).length,
+    realizedLosses: (reputation.downsideDistribution ?? []).length,
+    realizedPnLUsd: null,
+    medianReturn: reputation.medianFollowerReturn,
+    averageReturn: trimmedMean === undefined || trimmedMean === null ? (distribution.length === 0 ? null : distribution.reduce((sum, value) => sum + value, 0) / distribution.length) : trimmedMean,
+    hitRate: reputation.winRate ?? null,
+    earlyEntryScore: null,
+    consistencyScore: reputation.consistency,
+    copyabilityScore: copyabilitySamples === 0 ? null : reputation.copyableOpportunities / copyabilitySamples,
+    crowdingScore: reputation.crowdingFrequency,
+    followerSlippageEstimate: reputation.medianDeteriorationBps === null ? null : Math.max(0, Math.min(1, reputation.medianDeteriorationBps / 10_000)),
+    suspiciousCoordinationScore: null,
+    dataConfidence: reputation.dataCompleteness,
+    scoreCalculatedAt: calculatedAt
+  };
+}
 
 export function calculateWalletReputation(wallet: string, forward: ForwardReturnObservation[], copyability: CopyabilityEvaluation[], crowding: CrowdingObservation[], calculatedAt: string, rules: ReputationRules = PROVISIONAL_REPUTATION_RULES): WalletReputationSnapshot {
   const returns = forward.filter((item) => item.status === "VALID_OBSERVATION" && item.followerReturn !== null).map((item) => Math.max(-rules.returnCap, Math.min(rules.returnCap, item.followerReturn ?? 0)));

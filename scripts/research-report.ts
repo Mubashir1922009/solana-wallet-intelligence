@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { createPostgresStore } from "@intelligence/database";
 import { PROVISIONAL_CANDIDATE_RULES, walkForwardReport, type CandidateEvaluation, type ResearchObservation } from "@intelligence/core";
 
+export const SYNTHETIC_FIXTURE_WALLET_PREFIX = "SYNTHPROOF";
+
 function latestEvaluationsByWallet(items: CandidateEvaluation[]): CandidateEvaluation[] {
   const latest = new Map<string, CandidateEvaluation>();
   for (const item of items) {
@@ -20,12 +22,15 @@ async function main(): Promise<void> {
   try {
     const signals = await database.store.listSignals();
     const copyability = await database.store.listRecentCopyability(10_000);
-    const candidates = latestEvaluationsByWallet(await database.store.listCandidateEvaluations(10_000));
+    const allCandidates = latestEvaluationsByWallet(await database.store.listCandidateEvaluations(10_000));
+    const syntheticFixturesExcluded = allCandidates.filter((item) => item.wallet.startsWith(SYNTHETIC_FIXTURE_WALLET_PREFIX)).length;
+    const candidates = allCandidates.filter((item) => !item.wallet.startsWith(SYNTHETIC_FIXTURE_WALLET_PREFIX));
     const byTransaction = new Map(copyability.map((item) => [item.sourceTransactionSignature, item]));
     const byWallet = new Map(candidates.map((item) => [item.wallet, item]));
     const observations: ResearchObservation[] = [];
 
     for (const wallet of await database.store.listWallets()) {
+      if (wallet.publicKey.startsWith(SYNTHETIC_FIXTURE_WALLET_PREFIX)) continue;
       for (const outcome of await database.store.listForwardReturnObservations(wallet.publicKey)) {
         const signal = signals.find((item) => item.sourceTransactionSignature === outcome.transactionSignature);
         if (signal === undefined) continue;
@@ -113,6 +118,7 @@ async function main(): Promise<void> {
       followerSourceEventCount,
       historicalUnusableSourceEvents,
       candidateCount: candidates.length,
+      syntheticFixturesExcluded,
       researchWatchCount: candidates.filter((item) => item.state === "RESEARCH_WATCH").length,
       trackEligibleCount: candidates.filter((item) => item.state === "TRACK_ELIGIBLE" || item.state === "TRACKING").length,
       validFollowerSamples: followerEvidenceSampleSize,
