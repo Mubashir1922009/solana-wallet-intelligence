@@ -1,10 +1,10 @@
-import process from "node:process";
+﻿import process from "node:process";
 import { createServer } from "node:http";
 import { z } from "zod";
 import { parseConfig, safeConfigSummary } from "@intelligence/config";
 import { createAuthoritativeRuntimeDatabase } from "@intelligence/database";
 import { calculateWalletReputation, ContinuousShadowRuntime, deriveWalletMetricsFromReputation, DurableRuntimeWorker, evaluateCandidate, evaluateTokenRisk, FollowerOutcomeAccumulator, ForwardReturnResearchService, LiveIngestionCoordinator, newRuntimeJob, ObservedDatasetCandidateDiscoveryEngine, OptionalAIExitAnalyzer, PaperPositionService, PositionMonitor, ShadowRuntimeControl, SourceWalletPositionMonitor, TrackedWalletManager, WalletHistoryBackfillService, recommendExit, type RuntimeJobHandlers } from "@intelligence/core";
-import { ConsoleNotificationProvider, DurableNotificationService, FallbackAIProvider, FallbackChainDataProvider, GrokAIProvider, HeliusChainDataProvider, JupiterRecentTokenProvider, JupiterSwapV2MarketDataProvider, OpenRouterAIProvider, ProviderBudgetManager, ShardedSolanaLiveChainProvider, StandardSolanaRpcProvider, StandardSolanaTokenIntelligenceProvider, TelegramNotificationProvider, TelegramShadowController } from "@intelligence/providers";
+import { ConsoleNotificationProvider, DurableNotificationService, FallbackAIProvider, FallbackChainDataProvider, GroqAIProvider, HeliusChainDataProvider, JupiterRecentTokenProvider, JupiterSwapV2MarketDataProvider, OpenRouterAIProvider, ProviderBudgetManager, ShardedSolanaLiveChainProvider, StandardSolanaRpcProvider, StandardSolanaTokenIntelligenceProvider, TelegramNotificationProvider, TelegramShadowController } from "@intelligence/providers";
 
 try { process.loadEnvFile?.(".env"); } catch { /* Process manager may supply the environment. */ }
 const config = parseConfig(process.env); const database = createAuthoritativeRuntimeDatabase(config.DATABASE_URL); await database.schemaReady();
@@ -22,10 +22,10 @@ const telegramController = config.TELEGRAM_BOT_TOKEN === undefined || config.TEL
 const notifications = new DurableNotificationService(database.store, [new ConsoleNotificationProvider(), new TelegramNotificationProvider({ ...(config.TELEGRAM_BOT_TOKEN === undefined ? {} : { botToken: config.TELEGRAM_BOT_TOKEN }), ...(config.TELEGRAM_CHAT_ID === undefined ? {} : { chatId: config.TELEGRAM_CHAT_ID }), ...(config.DASHBOARD_PUBLIC_URL === undefined ? {} : { dashboardUrl: config.DASHBOARD_PUBLIC_URL }), ...(telegramController === undefined ? {} : { buildInlineKeyboard: (type, payload) => telegramController.buildKeyboard(type, payload) }) })]);
 const control = new ShadowRuntimeControl(); const discovery = new ObservedDatasetCandidateDiscoveryEngine(database.store); const positionSourceMonitor = new SourceWalletPositionMonitor(database.store); const positionService = new PaperPositionService(database.store);
 const openRouter = new OpenRouterAIProvider({ ...(config.OPENROUTER_API_KEY === undefined ? {} : { apiKey: config.OPENROUTER_API_KEY }), model: config.OPENROUTER_MODEL });
-const grok = new GrokAIProvider({ ...(config.XAI_API_KEY === undefined ? {} : { apiKey: config.XAI_API_KEY }), model: config.XAI_MODEL });
-const enabledAIProviders = [openRouter, grok].filter((provider) => provider.enabled);
+const groq = new GroqAIProvider({ ...(config.GROQ_API_KEY === undefined ? {} : { apiKey: config.GROQ_API_KEY }), model: config.GROQ_MODEL });
+const enabledAIProviders = [openRouter, groq].filter((provider) => provider.enabled);
 const aiProvider = enabledAIProviders.length > 1 ? new FallbackAIProvider(enabledAIProviders) : enabledAIProviders[0] ?? openRouter;
-console.info(JSON.stringify({ event: "ai_providers_configured", providers: enabledAIProviders.map((provider, index) => ({ index, model: provider === grok ? config.XAI_MODEL : config.OPENROUTER_MODEL })), failover: enabledAIProviders.length > 1 }));
+console.info(JSON.stringify({ event: "ai_providers_configured", providers: enabledAIProviders.map((provider, index) => ({ index, model: provider === groq ? config.GROQ_MODEL : config.OPENROUTER_MODEL })), failover: enabledAIProviders.length > 1 }));
 const aiExit = new OptionalAIExitAnalyzer(database.store, { enabled: aiProvider.enabled, analyze: (request) => aiProvider.analyze(request) });
 const forward = new ForwardReturnResearchService(database.store, quotes, { windowsMs: config.FORWARD_RETURN_WINDOWS_MS, stableMint: config.STABLE_TOKEN_MINT, stableDecimals: config.STABLE_TOKEN_DECIMALS });
 const accumulator = new FollowerOutcomeAccumulator(database.store, quotes, forward, {
@@ -114,3 +114,6 @@ function decimalToRaw(value: string, decimals: number): bigint {
   const fraction = (match[2] ?? "").padEnd(decimals, "0").slice(0, decimals);
   return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.length === 0 ? "0" : fraction);
 }
+
+
+

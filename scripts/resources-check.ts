@@ -1,4 +1,4 @@
-import process from "node:process";
+﻿import process from "node:process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -17,7 +17,7 @@ const resourceVariables = [
   "TELEGRAM_USER_ID",
   "TELEGRAM_WEBHOOK_SECRET",
   "OPENROUTER_API_KEY",
-  "XAI_API_KEY",
+  "GROQ_API_KEY",
   "REDIS_URL"
 ] as const;
 
@@ -72,3 +72,4 @@ export function formatResourceStatus(status: ResourceStatus): string {
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   console.info(formatResourceStatus(inspectResources(process.env)));
 }
+

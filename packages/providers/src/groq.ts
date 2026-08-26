@@ -1,4 +1,4 @@
-import { stableHash } from "@intelligence/shared";
+﻿import { stableHash } from "@intelligence/shared";
 import type { JsonValue } from "@intelligence/core";
 import { z } from "zod";
 import type { AIProvider, AIRequest, AIResult } from "./interfaces.js";
@@ -8,7 +8,7 @@ const completionSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1)
 });
 
-export interface GrokOptions {
+export interface GroqOptions {
   apiKey?: string;
   model: string;
   endpoint?: string;
@@ -18,14 +18,14 @@ export interface GrokOptions {
   fetchImplementation?: typeof fetch;
 }
 
-export class GrokAIProvider implements AIProvider {
+export class GroqAIProvider implements AIProvider {
   readonly enabled: boolean;
   private readonly cache = new Map<string, AIResult<unknown>>();
   private readonly request: typeof fetch;
   private queueTail: Promise<void> = Promise.resolve();
   private requestTimes: number[] = [];
 
-  constructor(private readonly options: GrokOptions) {
+  constructor(private readonly options: GroqOptions) {
     this.enabled = options.apiKey !== undefined;
     this.request = options.fetchImplementation ?? fetch;
   }
@@ -50,7 +50,7 @@ export class GrokAIProvider implements AIProvider {
       const maximumAttempts = Math.min(3, Math.max(1, this.options.maximumAttempts ?? 2));
       for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
         try {
-          const response = await this.request(this.options.endpoint ?? "https://api.x.ai/v1/chat/completions", {
+          const response = await this.request(this.options.endpoint ?? "https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: { authorization: `Bearer ${this.options.apiKey ?? ""}`, "content-type": "application/json" },
             body: JSON.stringify({
@@ -67,7 +67,7 @@ export class GrokAIProvider implements AIProvider {
           }
           const completion = completionSchema.parse(await response.json());
           const choice = completion.choices[0];
-          if (choice === undefined) throw new Error("Grok returned no choices");
+          if (choice === undefined) throw new Error("Groq returned no choices");
           const value = request.responseSchema.parse(JSON.parse(choice.message.content) as unknown) as z.infer<TSchema>;
           const result: AIResult<z.infer<TSchema>> = { modelRequested: this.options.model, modelReturned: completion.model ?? null, value, latencyMs: Date.now() - started, cached: false, errorCode: null };
           this.cache.set(cacheKey, result);
@@ -93,3 +93,4 @@ export class GrokAIProvider implements AIProvider {
     return release;
   }
 }
+

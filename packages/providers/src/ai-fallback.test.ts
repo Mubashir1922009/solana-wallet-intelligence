@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { AIProvider, AIRequest, AIResult } from "./interfaces.js";
 import { FallbackAIProvider } from "./ai-fallback.js";
-import { GrokAIProvider } from "./grok.js";
+import { GroqAIProvider } from "./groq.js";
 
 const request: AIRequest<z.ZodType> = { purpose: "test", systemPrompt: "s", userPrompt: "u", responseSchema: z.object({ answer: z.string() }) };
 
@@ -44,32 +44,32 @@ describe("fallback AI provider", () => {
 
 describe("grok AI provider", () => {
   it("disables cleanly without a key", async () => {
-    const provider = new GrokAIProvider({ model: "grok-3-mini" });
+    const provider = new GroqAIProvider({ model: "llama-3.3-70b-versatile" });
     expect(provider.enabled).toBe(false);
     const result = await provider.analyze(request);
     expect(result.errorCode).toBe("DISABLED_NO_API_KEY");
   });
 
-  it("parses a structured completion from the xAI-compatible endpoint", async () => {
+  it("parses a structured completion from the Groq-compatible endpoint", async () => {
     let capturedUrl = "";
-    const provider = new GrokAIProvider({
-      apiKey: "xai-test", model: "grok-3-mini",
+    const provider = new GroqAIProvider({
+      apiKey: "gsk-test", model: "llama-3.3-70b-versatile",
       fetchImplementation: (async (url: unknown) => {
         capturedUrl = String(url);
-        return new Response(JSON.stringify({ model: "grok-3-mini", choices: [{ message: { content: "{\"answer\":\"ok\"}" } }] }), { status: 200 });
+        return new Response(JSON.stringify({ model: "llama-3.3-70b-versatile", choices: [{ message: { content: "{\"answer\":\"ok\"}" } }] }), { status: 200 });
       }) as typeof fetch
     });
     const result = await provider.analyze(request);
-    expect(capturedUrl).toBe("https://api.x.ai/v1/chat/completions");
+    expect(capturedUrl).toBe("https://api.groq.com/openai/v1/chat/completions");
     expect(result.errorCode).toBeNull();
     expect(result.value).toMatchObject({ answer: "ok" });
-    expect(result.modelReturned).toBe("grok-3-mini");
+    expect(result.modelReturned).toBe("llama-3.3-70b-versatile");
   });
 
   it("reports HTTP quota exhaustion without retrying 429 past the attempt limit", async () => {
     let calls = 0;
-    const provider = new GrokAIProvider({
-      apiKey: "xai-test", model: "grok-3-mini", maximumAttempts: 2,
+    const provider = new GroqAIProvider({
+      apiKey: "gsk-test", model: "llama-3.3-70b-versatile", maximumAttempts: 2,
       fetchImplementation: (async () => { calls += 1; return new Response("rate limited", { status: 429 }); }) as typeof fetch
     });
     const result = await provider.analyze(request);
@@ -77,3 +77,4 @@ describe("grok AI provider", () => {
     expect(calls).toBe(2);
   });
 });
+

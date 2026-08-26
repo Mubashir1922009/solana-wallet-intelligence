@@ -6,10 +6,11 @@ export * from "./jupiter.js";
 export * from "./jupiter-tokens.js";
 export * from "./telegram-control.js";
 export * from "./openrouter.js";
-export * from "./grok.js";
+export * from "./groq.js";
 export * from "./ai-fallback.js";
 export * from "./execution.js";
 export * from "./notifications.js";
 export * from "./rate-budget.js";
 export * from "./live-chain.js";
 export * from "./token-rpc.js";
+
