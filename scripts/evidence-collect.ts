@@ -55,38 +55,43 @@ async function main(): Promise<void> {
     heliusConfigured: true
   }));
 
-  const worker = spawn(process.execPath, [tsxCli, "apps/worker/src/main.ts"], {
-    cwd: process.cwd(), stdio: "inherit", env: environment, windowsHide: true
-  });
-
+  const startedAtMs = Date.now();
   let timedOut = false;
   let operatorStopped = false;
-  const stop = (reason: "timer" | "operator"): void => {
-    if (reason === "timer") timedOut = true; else operatorStopped = true;
-    if (!worker.killed) worker.kill("SIGTERM");
-  };
-  const timer = setTimeout(() => stop("timer"), requestedDurationMs);
-  const onSigint = (): void => stop("operator");
-  const onSigterm = (): void => stop("operator");
+  let restarts = 0;
+  let lastExit: { code: number | null; signal: NodeJS.Signals | null } = { code: null, signal: null };
+  const onSigint = (): void => { operatorStopped = true; };
+  const onSigterm = (): void => { operatorStopped = true; };
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    worker.once("error", reject);
-    worker.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  clearTimeout(timer);
+  while (!operatorStopped) {
+    const remainingMs = requestedDurationMs - (Date.now() - startedAtMs);
+    if (remainingMs <= 0) { timedOut = true; break; }
+    const worker = spawn(process.execPath, [tsxCli, "apps/worker/src/main.ts"], {
+      cwd: process.cwd(), stdio: "inherit", env: environment, windowsHide: true
+    });
+    let timedOutThisAttempt = false;
+    const timer = setTimeout(() => { timedOutThisAttempt = true; if (!worker.killed) worker.kill("SIGTERM"); }, remainingMs);
+    lastExit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    clearTimeout(timer);
+    if (timedOutThisAttempt || operatorStopped) { if (timedOutThisAttempt) timedOut = true; break; }
+    restarts += 1;
+    console.warn(JSON.stringify({ event: "worker_restarted", attempt: restarts, exitCode: lastExit.code, exitSignal: lastExit.signal, posture: "SUPERVISED RESTART; DURABLE POSTGRESQL STATE IS AUTHORITATIVE" }));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 5_000 * restarts)));
+  }
   process.off("SIGINT", onSigint);
   process.off("SIGTERM", onSigterm);
-
-  const expectedStop = timedOut || operatorStopped;
-  if (!expectedStop && exit.code !== 0) throw new Error(`Evidence collector worker exited unexpectedly with code ${exit.code ?? "null"} signal ${exit.signal ?? "none"}`);
 
   console.info(JSON.stringify({
     event: "evidence_collection_stopped",
     reason: timedOut ? "DURATION_COMPLETE" : operatorStopped ? "OPERATOR_STOP" : "WORKER_EXIT",
-    workerExitCode: exit.code,
-    workerSignal: exit.signal
+    restarts,
+    lastExitCode: lastExit.code,
+    lastExitSignal: lastExit.signal
   }));
 
   // Produce a durable snapshot after the worker releases the database connection/lease.
