@@ -17,6 +17,7 @@ const resourceVariables = [
   "TELEGRAM_USER_ID",
   "TELEGRAM_WEBHOOK_SECRET",
   "OPENROUTER_API_KEY",
+  "XAI_API_KEY",
   "REDIS_URL"
 ] as const;
 

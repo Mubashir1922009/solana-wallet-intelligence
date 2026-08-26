@@ -33,6 +33,8 @@ const environmentSchema = z.object({
   JUPITER_KEYLESS_RPS: z.coerce.number().min(0.1).max(0.5).default(0.5),
   OPENROUTER_API_KEY: optionalSecret,
   OPENROUTER_MODEL: z.string().min(1).default("openrouter/free"),
+  XAI_API_KEY: optionalSecret,
+  XAI_MODEL: z.string().min(1).default("grok-3-mini"),
   TELEGRAM_BOT_TOKEN: optionalSecret,
   TELEGRAM_CHAT_ID: optionalSecret,
   TELEGRAM_USER_ID: optionalSecret,
